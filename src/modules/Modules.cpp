@@ -8,6 +8,7 @@
 #include "input/TrackballInterruptImpl1.h"
 #include "input/UpDownInterruptImpl1.h"
 #include "modules/SystemCommandsModule.h"
+#include "modules/LoRabotModule.h"
 #if !MESHTASTIC_EXCLUDE_I2C
 #include "input/cardKbI2cImpl.h"
 #endif
@@ -160,6 +161,10 @@ void setupModules()
 #endif
 #if !MESHTASTIC_EXCLUDE_POWERSTRESS
         new PowerStressModule();
+#endif
+
+#if HAS_SCREEN
+        loRabotModule = new LoRabotModule();
 #endif
         // Example: Put your module here
         // new ReplyModule();
