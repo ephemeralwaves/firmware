@@ -20,7 +20,7 @@ enum PetState : uint8_t {
     BORED,
     SLEEPY,
     GRATEFUL,
-    FRIEND,
+    MESSENGER,
     INTENSE,
     DEMOTIVATED,
     MOTIVATED
@@ -88,10 +88,10 @@ private:
     bool inIntenseState;           // Currently in INTENSE state
     uint32_t intenseStartTime;     // When INTENSE state started
     
-    // FRIEND state tracking (relay events)
+    // MESSENGER state tracking (relay events)
     uint32_t lastRelayCount;       // Last known relay count
-    bool inFriendState;            // Currently in FRIEND state
-    uint32_t friendStartTime;      // When FRIEND state started
+    bool inMessengerState;         // Currently in MESSENGER state
+    uint32_t messengerStartTime;   // When MESSENGER state started
     
     // Looking state tracking
     bool lookingRight;
@@ -137,8 +137,8 @@ private:
     // Check if INTENSE state should be triggered
     bool shouldTriggerIntense();
     
-    // Check if FRIEND state should be triggered (relay events)
-    bool shouldTriggerFriend();
+    // Check if MESSENGER state should be triggered (relay events)
+    bool shouldTriggerMessenger();
     
     // Calculate new pet state based on current conditions
     PetState calculateNewState();

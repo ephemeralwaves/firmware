@@ -7,14 +7,14 @@ The LoRabot Module is a Pwnagotchi-inspired digital companion for Meshtastic dev
 
 ### 1. Emotional States
 The LoRabot has 12 different emotional states:
-- **AWAKE**: Neutral baseline state
-- **LOOKING_AROUND_LEFT/RIGHT**: Scanning for nodes
+- **AWAKE**: Neutral baseline state, Scanning for nodes
+- **LOOKING_AROUND_LEFT or LOOKING_AROUND_RIGHT**: Scanning for nodes
 - **HAPPY**: New nodes discovered
 - **EXCITED**: Messages sent/received
 - **BORED**: No network activity
-- **SLEEPY**: Night hours/low power
-- **GRATEFUL**: Thankful for messages
-- **FRIEND**: Helped relay a message
+- **SLEEPY**: Night hours/low power (wip)
+- **GRATEFUL**: Thankful for messages sent/received
+- **MESSENGER**: Helped relay a message
 - **INTENSE**: Heavy message traffic (>3 messages in 5 seconds)
 - **DEMOTIVATED**: Isolation/poor signal
 - **MOTIVATED**: Debug state
@@ -29,17 +29,18 @@ Each state has a unique ASCII face:
 - `( - _ - )` - BORED
 - `( ~ _ ~ )` - SLEEPY
 - `( ^ o ^ )` - GRATEFUL
-- `( + _ + )/>>` - FRIEND
+- `( + _ + )/>` - MESSENGER
 - `( O _ O )` - INTENSE
 - `( / _ \ )` - DEMOTIVATED
 - `( ! . ! )` - MOTIVATED
 
-### 3. Message Display
-- Shows actual received message text instead of generic "Message Received!"
-- Displays message for 5 seconds when excited
+### 3. Receiving or Transmitting Messages
+- State: EXCITED/GRATEFUL Cycle
+- Shows actual received message text on the right side of screen
+- Total excited/grateful cycle lasts 6 seconds (3s EXCITED + 3s GRATEFUL)
 - Supports both text messages and position updates
 
-### 4. Funny Messages
+### 4. Idle Messages
 During AWAKE and LOOKING states, displays rotating funny messages:
 - "Too cute to route."
 - "Mesh me, maybe?"
@@ -50,7 +51,7 @@ During AWAKE and LOOKING states, displays rotating funny messages:
 - "Looking for friends..."
 - "Mesh network detective!"
 
-### 5. Relay Messages (FRIEND State)
+### 5. Relay Messages (MESSENGER State)
 When the node helps relay a message, displays rotating relay messages:
 - "Courier vibes activated"
 - "Passing notes like school"
@@ -62,16 +63,38 @@ When the node helps relay a message, displays rotating relay messages:
 - "Packet passed. I'm fast!"
 
 ### 6. Node Discovery
+- HAPPY State
 - Shows "Hello Node [nodename]!" when new nodes are discovered
 - Displays for 8 seconds in HAPPY state
 
 ### 7. State Transitions
 - **EXCITED/GRATEFUL Cycle**: 3 seconds EXCITED, then 3 seconds GRATEFUL
 - **INTENSE State**: Triggers when >3 messages in 5 seconds, lasts 3 seconds
-- **FRIEND State**: Triggers when relaying messages, lasts 4 seconds
-- **Looking Cycle**: 5-second rotations between AWAKE, LOOKING_LEFT, LOOKING_RIGHT
+- **MESSENGER State**: Triggers when relaying messages, lasts 4 seconds
+- **Looking Cycle**: 5-second rotations between LOOKING_LEFT, LOOKING_RIGHT, AWAKE
+- **SLEEP state**: starts at midnight and lasts until 6am
 
-### 8. Performance Optimizations
+### 8. State Priority System
+States have priority-based transitions (highest to lowest):
+1. **INTENSE** (highest priority) - 3-second duration
+2. **MESSENGER** - 4-second duration  
+3. **EXCITED/GRATEFUL** - 6-second total cycle
+4. **HAPPY** - 8 seconds when new node discovered
+5. **Default states** (AWAKE, LOOKING, SLEEPY, etc.)
+
+### 9. State Change Delays
+- **EXCITED state**: Changes immediately when messages received
+- **Other states**: 5-second delay between state changes to prevent rapid switching
+- State changes are optimized to reduce UI interference
+
+### 10. Status Display
+- **Normal states**: Shows "Nodes:X Friends:Y" status line on the right side
+- **AWAKE/LOOKING states**: Shows rotating funny messages on the right side
+- **MESSENGER state**: Shows rotating relay messages on the right side
+- **HAPPY state**: Shows discovered node name on the left side
+- **EXCITED state**: Shows received message popup on the right side
+
+### 11. Performance Optimizations
 - Reduced logging to prevent UI interference
 - Increased update intervals to reduce thread load
 - Cached favorite node counting

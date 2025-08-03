@@ -22,7 +22,7 @@ const char* const LoRabotModule::FACES[12] PROGMEM = {
     "( - _ - )",    // BORED - no network activity
     "( ~ _ ~ )",    // SLEEPY - night hours/low power
     "( ^ o ^ )",    // GRATEFUL - thankful for messages
-    "( + _ + )/>>", // FRIEND - helped relay a message
+    "( + _ + )/>",  // MESSENGER - helped relay a message
     "( O _ O )",    // INTENSE - heavy message traffic
     "( / _ \\ )",   // DEMOTIVATED - isolation/poor signal
     "( ! . ! )"     // MOTIVATED - debug state
@@ -38,13 +38,13 @@ const char* const LoRabotModule::STATE_NAMES[12] PROGMEM = {
     "Bored",
     "Sleepy",
     "Grateful",
-    "Friend!",
+    "Messenger",
     "Intense",
     "Sad",
     "Motivated"
 };
 
-// Funny messages for awake/looking states
+// Messages for AWAKE/LOOKING states
 const char* const LoRabotModule::FUNNY_MESSAGES[8] PROGMEM = {
     "Too cute to route.",
     "Mesh me, maybe?",
@@ -56,7 +56,7 @@ const char* const LoRabotModule::FUNNY_MESSAGES[8] PROGMEM = {
     "Mesh network detective!"
 };
 
-// Relay messages for FRIEND state
+// Relay messages for MESSENGER state
 const char* const LoRabotModule::RELAY_MESSAGES[8] PROGMEM = {
     "Courier vibes activated",
     "Passing notes like school",
@@ -110,10 +110,10 @@ LoRabotModule::LoRabotModule() :
     inIntenseState = false;
     intenseStartTime = 0;
     
-    // Initialize FRIEND state tracking
+    // Initialize MESSENGER state tracking
     lastRelayCount = 0;
-    inFriendState = false;
-    friendStartTime = 0;
+    inMessengerState = false;
+    messengerStartTime = 0;
     
     // Initialize looking state tracking
     lookingRight = true;
@@ -124,11 +124,11 @@ LoRabotModule::LoRabotModule() :
     loadState();
     
     // Start the thread
-    setIntervalFromNow(5000); // Initial 5 second interval
+    setIntervalFromNow(6000); // Initial 6 second interval
     
     // Debug output
-    LOG_INFO("LoRabot Module initialized - wants UI frame: %s", wantUIFrame() ? "YES" : "NO");
-    LOG_INFO("LoRabot Module getUIFrameObservable: %p", getUIFrameObservable());
+    //LOG_INFO("LoRabot Module initialized - wants UI frame: %s", wantUIFrame() ? "YES" : "NO");
+    //LOG_INFO("LoRabot Module getUIFrameObservable: %p", getUIFrameObservable());
 }
 
 LoRabotModule::~LoRabotModule() {
@@ -167,12 +167,12 @@ int32_t LoRabotModule::runOnce() {
                 // Use the actual node name with "Hello Node" prefix
                 snprintf(lastNodeName, sizeof(lastNodeName), "Hello  %s!", newestNode->user.long_name);
             } else {
-                // Fallback to generic name
+                // Fallback to generic name (node number)
                 snprintf(lastNodeName, sizeof(lastNodeName), "Hello Node %d!", totalNodeCount);
             }
             
-            // Reduce logging to prevent UI interference
-            LOG_DEBUG("LoRabot discovered new node: %s! Total nodes: %d", lastNodeName, totalNodeCount);
+            
+            //LOG_DEBUG("LoRabot discovered new node: %s! Total nodes: %d", lastNodeName, totalNodeCount);
         }
         
         currentNodeCount = totalNodeCount;
@@ -182,19 +182,19 @@ int32_t LoRabotModule::runOnce() {
     // Clear the "showing new node" flag after timeout
     if (showingNewNode && (millis() - nodeDiscoveryTime) > 10000) {
         showingNewNode = false;
-        LOG_DEBUG("LoRabot clearing new node flag - returning to normal states");
+        //LOG_DEBUG("LoRabot clearing new node flag - returning to normal states");
     }
     
     // Remove heavy debug logging that was causing performance issues
     // Only log state changes occasionally to reduce interference
     
-    // Check for relay events (FRIEND state)
+    // Check for relay events (MESSENGER state)
     uint32_t now = millis();
-    if (shouldTriggerFriend() && !inFriendState) {
-        inFriendState = true;
-        friendStartTime = now;
+    if (shouldTriggerMessenger() && !inMessengerState) {
+        inMessengerState = true;
+        messengerStartTime = now;
         relayMessageIndex = (relayMessageIndex + 1) % 8; // Rotate through 8 relay messages
-        LOG_DEBUG("LoRabot triggered FRIEND state! Helped relay a message to another node.");
+        //LOG_DEBUG("LoRabot triggered MESSENGER state! Helped relay a message to another node.");
     }
     
     // TODO: Replace with correct battery API when found
@@ -243,7 +243,7 @@ ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
             strcpy(receivedMessageText, "Position update!");
         }
         
-        LOG_INFO("LoRabot received message (port %d) - triggering excited/grateful cycle!", mp.decoded.portnum);
+       // LOG_INFO("LoRabot received message (port %d) - triggering excited/grateful cycle!", mp.decoded.portnum);
         
         // IMMEDIATELY update state to EXCITED - don't wait for timing
         previousState = currentState;
@@ -251,10 +251,10 @@ ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
         lastStateChange = millis();
         displayNeedsUpdate = true;
         
-        LOG_INFO("LoRabot immediately changed to EXCITED state! Will cycle to GRATEFUL after 6 seconds.");
+        //LOG_INFO("LoRabot immediately changed to EXCITED state! Will cycle to GRATEFUL after 6 seconds.");
     } else {
         // Debug: log all received packets to see what ports are being received
-        LOG_DEBUG("LoRabot received packet on port %d (not triggering excited)", mp.decoded.portnum);
+        //LOG_DEBUG("LoRabot received packet on port %d (not triggering excited)", mp.decoded.portnum);
     }
     
     // Update friend tracking if this is from a user
@@ -298,8 +298,8 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
         // Show the discovered node name when happy (new node found)
         display->setFont(ArialMT_Plain_10);
         display->drawString(x + 34, y + 50, lastNodeName);
-    } else if (currentState == FRIEND) {
-        // Show relay messages for FRIEND state
+    } else if (currentState == MESSENGER) {
+        // Show relay messages for MESSENGER state
         const char* relayMsg = (const char*)pgm_read_ptr(&RELAY_MESSAGES[relayMessageIndex]);
         display->setFont(ArialMT_Plain_10);
         display->drawString(x + 64, y + 50, relayMsg);
@@ -381,7 +381,7 @@ void LoRabotModule::updatePetState() {
         }
         
         // Reduce logging to prevent UI interference
-        LOG_DEBUG("LoRabot state changed: %d -> %d", previousState, currentState);
+        //LOG_DEBUG("LoRabot state changed: %d -> %d", previousState, currentState);
         
         // Save state periodically
         if ((now - lastStateChange) > 60000) { // Every minute
@@ -462,8 +462,8 @@ bool LoRabotModule::shouldTriggerIntense() {
     return messageCount > 3;
 }
 
-// Check if FRIEND state should be triggered (relay events)
-bool LoRabotModule::shouldTriggerFriend() {
+// Check if MESSENGER state should be triggered (relay events)
+bool LoRabotModule::shouldTriggerMessenger() {
     // Get current relay count from RadioLibInterface
     uint32_t currentRelayCount = 0;
     if (RadioLibInterface::instance) {
@@ -494,21 +494,21 @@ PetState LoRabotModule::calculateNewState() {
         } else {
             // Exit INTENSE state after 3 seconds
             inIntenseState = false;
-            LOG_DEBUG("LoRabot exiting INTENSE state after 3 seconds");
+            //LOG_DEBUG("LoRabot exiting INTENSE state after 3 seconds");
         }
     }
     
-    // Check for FRIEND state with 4-second duration (high priority)
-    if (inFriendState) {
-        uint32_t friendDuration = (now - friendStartTime) / 1000; // seconds
-        if (friendDuration < 4) {
+    // Check for MESSENGER state with 4-second duration (high priority)
+    if (inMessengerState) {
+        uint32_t messengerDuration = (now - messengerStartTime) / 1000; // seconds
+        if (messengerDuration < 4) {
             // Remove debug logging to reduce interference
-            // LOG_DEBUG("LoRabot staying in FRIEND state - duration: %d seconds", friendDuration);
-            return FRIEND;
+            // LOG_DEBUG("LoRabot staying in MESSENGER state - duration: %d seconds", messengerDuration);
+            return MESSENGER;
         } else {
-            // Exit FRIEND state after 4 seconds
-            inFriendState = false;
-            LOG_DEBUG("LoRabot exiting FRIEND state after 4 seconds");
+            // Exit MESSENGER state after 4 seconds
+            inMessengerState = false;
+            //LOG_DEBUG("LoRabot exiting MESSENGER state after 4 seconds");
         }
     }
     
@@ -526,7 +526,7 @@ PetState LoRabotModule::calculateNewState() {
         } else {
             // Exit excited/grateful cycle after 6 seconds total
             inExcitedState = false;
-            LOG_DEBUG("LoRabot exiting excited/grateful cycle after 6 seconds");
+            //LOG_DEBUG("LoRabot exiting excited/grateful cycle after 6 seconds");
         }
     }
     
@@ -584,8 +584,8 @@ uint32_t LoRabotModule::getUpdateInterval() {
     switch (currentState) {
         case INTENSE:
             return 1000; // Increased from 500ms to 1000ms for INTENSE state
-        case FRIEND:
-            return 1500; // Increased from 800ms to 1500ms for FRIEND state
+        case MESSENGER:
+            return 1500; // Increased from 800ms to 1500ms for MESSENGER state
         case EXCITED:
         case GRATEFUL:
             return 2000; // Increased from 1000ms to 2000ms for excited/grateful cycle
