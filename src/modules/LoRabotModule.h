@@ -3,12 +3,14 @@
 #include "SinglePortModule.h"
 #include "concurrency/OSThread.h"
 #include "mesh/MeshTypes.h"
+#include "mesh/Router.h"
 #include "Observer.h"
 #include "NodeDB.h"
 #include "MeshService.h"
 #include "mesh/ProtobufModule.h"
 #include "OLEDDisplay.h"
 #include "OLEDDisplayUi.h"
+#include "TextMessageModule.h" // Added for isFromUs
 
 // Pet emotional states
 enum PetState : uint8_t {
@@ -20,10 +22,10 @@ enum PetState : uint8_t {
     BORED,
     SLEEPY,
     GRATEFUL,
-    MESSENGER,
+    RELAY,
     INTENSE,
     DEMOTIVATED,
-    MOTIVATED
+    SENDER
 };
 
 // Personality configuration
@@ -88,15 +90,30 @@ private:
     bool inIntenseState;           // Currently in INTENSE state
     uint32_t intenseStartTime;     // When INTENSE state started
     
-    // MESSENGER state tracking (relay events)
+    // RELAY state tracking (relay events)
     uint32_t lastRelayCount;       // Last known relay count
-    bool inMessengerState;         // Currently in MESSENGER state
-    uint32_t messengerStartTime;   // When MESSENGER state started
+    bool inRelayState;             // Currently in RELAY state
+    uint32_t relayStartTime;       // When RELAY state started
+    
+    // SENDER state tracking (sent messages)
+    bool inSenderState;            // Currently in SENDER state
+    uint32_t senderStartTime;      // When SENDER state started
+    uint8_t senderMessageIndex;    // Track which sender message to show
+    
+    // Track when we're sending to prevent interference with node discovery
+    bool isSendingMessage;
+    
+    // NEW: Enhanced SENDER state detection
+    uint32_t lastTxGoodCount;      // Last known txGood count
+    uint32_t lastTextMessageTxTime; // When we last detected a text message transmission
+    bool pendingSenderTrigger;     // Flag to trigger SENDER state on next txGood increase
+    uint32_t senderDetectionWindow; // Time window for correlating txGood with text messages
     
     // Looking state tracking
     bool lookingRight;
     uint32_t lastLookingChange;
     uint8_t lookingCycle; // 0=left, 1=right, 2=awake
+    uint32_t lastFaceAnimationTime; // Track face animation separately from thread timing
     
     // Display optimization
     char lastDisplayedFace[16];
@@ -137,8 +154,11 @@ private:
     // Check if INTENSE state should be triggered
     bool shouldTriggerIntense();
     
-    // Check if MESSENGER state should be triggered (relay events)
-    bool shouldTriggerMessenger();
+    // Check if RELAY state should be triggered (relay events)
+    bool shouldTriggerRelay();
+    
+    // Check if SENDER state should be triggered (sent messages)
+    bool shouldTriggerSender();
     
     // Calculate new pet state based on current conditions
     PetState calculateNewState();
@@ -152,6 +172,7 @@ private:
     static const char* const STATE_NAMES[12];
     static const char* const FUNNY_MESSAGES[8];
     static const char* const RELAY_MESSAGES[8];
+    static const char* const SENDER_MESSAGES[5];
     
     // Test function for debugging
 public:
@@ -163,6 +184,28 @@ public:
         currentState = EXCITED;
         lastStateChange = millis();
         displayNeedsUpdate = true;
+    }
+    
+    // Trigger SENDER state when a message is sent
+    void triggerSenderState() {
+        LOG_INFO("LoRabot triggerSenderState() called - message sent");
+        uint32_t now = millis();
+        inSenderState = true;
+        senderStartTime = now;
+        senderMessageIndex = (senderMessageIndex + 1) % 5; // Rotate through 5 sender messages
+        
+        // Set sending flag to prevent HAPPY state interference
+        isSendingMessage = true;
+        
+        // Clear pending trigger since we're now in SENDER state
+        pendingSenderTrigger = false;
+        
+        previousState = currentState;
+        currentState = SENDER;
+        lastStateChange = now;
+        displayNeedsUpdate = true;
+        
+        LOG_INFO("LoRabot SENDER state triggered! Will show for 3 seconds.");
     }
 };
 
