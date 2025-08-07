@@ -94,6 +94,9 @@ LoRabotModule::LoRabotModule() :
     nodeDiscoveryTime = 0;
     showingNewNode = false;
     
+    // Initialize current node count to prevent false "new node" detection on startup
+    currentNodeCount = 0;
+    
     // Initialize message tracking
     lastMessageTime = 0;
     excitedStartTime = 0;
@@ -158,8 +161,8 @@ int32_t LoRabotModule::runOnce() {
         nodeCheckCounter = 0;
         size_t totalNodeCount = nodeDB->getNumMeshNodes();
         
-        // Only process if node count actually changed
-        if (totalNodeCount != currentNodeCount) {
+        // Only process if node count actually changed AND we're not on first boot
+        if (totalNodeCount != currentNodeCount && currentNodeCount > 0) {
             // Check if this is actually a new node discovery (not just us sending a message)
             // Look for the node that was most recently heard
             const meshtastic_NodeInfoLite* newestNode = nullptr;
@@ -259,6 +262,7 @@ int32_t LoRabotModule::runOnce() {
                     if (pendingSenderTrigger && (now - lastTextMessageTxTime) < 500) { // Reduced window for better correlation
                         // We detected a text message pattern AND txGood increased - this is likely a text message
                         LOG_INFO("LoRabot detected text message transmission via correlation - triggering SENDER state");
+                        isSendingMessage = true; // Set flag immediately to prevent HAPPY state interference
                         triggerSenderState();
                         pendingSenderTrigger = false; // Clear the flag
                     }
@@ -267,6 +271,7 @@ int32_t LoRabotModule::runOnce() {
                         // Single packet transmission without pending trigger - likely a direct message
                         // Direct messages don't pass through handleReceived() on the sending node, so we need to be aggressive
                         LOG_INFO("LoRabot detected single packet transmission - likely direct message, triggering SENDER state");
+                        isSendingMessage = true; // Set flag immediately to prevent HAPPY state interference
                         triggerSenderState();
                     }
                     // STEP 4: Handle multiple packet transmissions (might be system packets)
@@ -472,7 +477,6 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
             lastSenderMessageUpdate = now;
         }
         
-        // No funny message cycling for HAPPY state - only show node name
     }
     
     // Only update status line every 2 seconds to reduce CPU usage
