@@ -245,7 +245,7 @@ int32_t LoRabotModule::runOnce() {
         // This is crucial for detecting DIRECT MESSAGES that don't pass through handleReceived() on the sending node
         static uint32_t lastSenderCheck = 0;
         uint32_t now = millis();
-        if (now - lastSenderCheck > 1000) { // Check every second
+        if (now - lastSenderCheck > 250) { // Check every 250ms for much faster response
             lastSenderCheck = now;
             
             if (RadioLibInterface::instance && !inSenderState && !isSendingMessage) {
