@@ -16,7 +16,7 @@ extern TextMessageModule *textMessageModule;
 // Each face is tested for proper display on SSD1306 OLED
 // Using basic ASCII + common Unicode that renders well on small displays
 
-const char* const LoRabotModule::FACES[12] PROGMEM = {
+const char* const LoRabotModule::FACES[11] PROGMEM = {
     "( o . o )",    // AWAKE - neutral baseline (safe ASCII)
     "( > . > )",    // LOOKING_AROUND - scanning for nodes (right)
     "( < . < )",    // LOOKING_AROUND - scanning for nodes (left)
@@ -25,14 +25,13 @@ const char* const LoRabotModule::FACES[12] PROGMEM = {
     "( - _ - )",    // BORED - no network activity - not implemented, WIP
     "( ~ _ ~ )",    // SLEEPY - night hours/low power
     "( ^ o ^ )",    // GRATEFUL - thankful for received messages
-    "( + _ + )/>",  // RELAY - helped relay a message - not implemented, WIP
     "( O _ O )",    // INTENSE - heavy message traffic- not implemented, WIP
     "( / _ \\ )",   // DEMOTIVATED - isolation/poor signal
-    "(  ' . ')>"   // SENDER - messages sent
+    "(  ' . ')>"   // SENDER - messages sent by user on a channel
 };
 
 // Human-readable state names for debugging
-const char* const LoRabotModule::STATE_NAMES[12] PROGMEM = {
+const char* const LoRabotModule::STATE_NAMES[11] PROGMEM = {
     "Awake",
     "Looking R",
     "Looking L",
@@ -41,7 +40,6 @@ const char* const LoRabotModule::STATE_NAMES[12] PROGMEM = {
     "Bored",
     "Sleepy",
     "Grateful",
-    "Relay",
     "Intense",
     "Sad",
     "Sender"
@@ -59,17 +57,7 @@ const char* const LoRabotModule::FUNNY_MESSAGES[8] PROGMEM = {
     "Mesh network detective!"
 };
 
-// Relay messages for RELAY state
-const char* const LoRabotModule::RELAY_MESSAGES[8] PROGMEM = {
-    "Courier vibes activated",
-    "Passing notes like school",
-    "I'm a walking repeater",
-    "Zoom! Message relayed",
-    "Data whisperer at work",
-    "Radio butler duties: done",
-    "I relay, therefore I am",
-    "Packet passed. I'm fast!"
-};
+
 
 // Sender messages for SENDER state
 const char* const LoRabotModule::SENDER_MESSAGES[5] PROGMEM = {
@@ -114,7 +102,6 @@ LoRabotModule::LoRabotModule() :
     messagePopupTime = 0;
     memset(receivedMessageText, 0, sizeof(receivedMessageText));
     funnyMessageIndex = 0;
-    relayMessageIndex = 0;
     
     // Initialize INTENSE state tracking
     memset(messageTimes, 0, sizeof(messageTimes));
@@ -122,10 +109,7 @@ LoRabotModule::LoRabotModule() :
     inIntenseState = false;
     intenseStartTime = 0;
     
-    // Initialize RELAY state tracking
-    lastRelayCount = 0;
-    inRelayState = false;
-    relayStartTime = 0;
+
     
     // Initialize SENDER state tracking
     inSenderState = false;
@@ -255,22 +239,7 @@ int32_t LoRabotModule::runOnce() {
         }
     }
     
-    // Remove heavy debug logging that was causing performance issues
-    // Only log state changes occasionally to reduce interference
-    
-            // Check for relay events (RELAY state) - DISABLED as requested
-        // static uint8_t relayCheckCounter = 0;
-        // relayCheckCounter++;
-        // if (relayCheckCounter >= 2) { // Check every 2 cycles instead of 5 for better responsiveness
-        //     relayCheckCounter = 0;
-        //     uint32_t now = millis();
-        //     if (shouldTriggerRelay() && !inRelayState) {
-        //         inRelayState = true;
-        //         relayStartTime = now;
-        //         relayMessageIndex = (relayMessageIndex + 1) % 8; // Rotate through 8 relay messages
-        //         LOG_DEBUG("LoRabot triggered RELAY state! Helped relay a message to another node.");
-        //     }
-        // }
+
         
         // ENHANCED SENDER state detection - correlates txGood increases with text message detection
         static uint32_t lastSenderCheck = 0;
@@ -480,12 +449,7 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
              // Show the discovered node name when happy (new node found) - on the right side
              display->setFont(ArialMT_Plain_10);
              display->drawString(x + 64, y + 50, lastNodeName);
-         } else if (currentState == RELAY) {
-            // Show relay messages for RELAY state
-            const char* relayMsg = (const char*)pgm_read_ptr(&RELAY_MESSAGES[relayMessageIndex]);
-            display->setFont(ArialMT_Plain_10);
-            display->drawString(x + 64, y + 50, relayMsg);
-        } else if (currentState == SENDER) {
+         } else if (currentState == SENDER) {
             // Show sender messages for SENDER state
             const char* senderMsg = (const char*)pgm_read_ptr(&SENDER_MESSAGES[senderMessageIndex]);
             display->setFont(ArialMT_Plain_10);
@@ -534,11 +498,7 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
          if (currentState == HAPPY && showingNewNode) {
              display->setFont(ArialMT_Plain_10);
              display->drawString(x + 64, y + 50, lastNodeName);
-         } else if (currentState == RELAY) {
-            const char* relayMsg = (const char*)pgm_read_ptr(&RELAY_MESSAGES[relayMessageIndex]);
-            display->setFont(ArialMT_Plain_10);
-            display->drawString(x + 64, y + 50, relayMsg);
-        } else if (currentState == SENDER) {
+         } else if (currentState == SENDER) {
             const char* senderMsg = (const char*)pgm_read_ptr(&SENDER_MESSAGES[senderMessageIndex]);
             display->setFont(ArialMT_Plain_10);
             display->drawString(x + 64, y + 50, senderMsg);
@@ -679,45 +639,7 @@ bool LoRabotModule::shouldTriggerIntense() {
     return messageCount > 3;
 }
 
-// Check if RELAY state should be triggered (relay events)
-bool LoRabotModule::shouldTriggerRelay() {
-    // Get current relay count from RadioLibInterface
-    uint32_t currentRelayCount = 0;
-    if (RadioLibInterface::instance) {
-        currentRelayCount = RadioLibInterface::instance->txRelay;
-    }
-    
-    // Check if relay count has increased (we relayed a message)
-    if (currentRelayCount > lastRelayCount) {
-        LOG_DEBUG("LoRabot relay count increased: %d -> %d", lastRelayCount, currentRelayCount);
-        lastRelayCount = currentRelayCount;
-        return true;
-    }
-    
-    // Alternative: Check router statistics for relay activity
-    // This is a fallback in case RadioLibInterface::instance->txRelay is not working
-    static uint32_t lastRouterRelayCheck = 0;
-    uint32_t now = millis();
-    if (now - lastRouterRelayCheck > 10000) { // Check every 10 seconds
-        lastRouterRelayCheck = now;
-        
-        // Try to get relay info from router if available
-        if (router) {
-            // Note: This is a placeholder - we'd need to find the correct router API
-            // For now, we'll rely on the RadioLibInterface method
-            LOG_DEBUG("LoRabot router relay check - RadioLibInterface txRelay: %d", currentRelayCount);
-        }
-    }
-    
-    // Debug: log relay count occasionally to see if it's changing
-    static uint32_t lastRelayDebugTime = 0;
-    if (now - lastRelayDebugTime > 30000) { // Log every 30 seconds
-        LOG_DEBUG("LoRabot relay check - current: %d, last: %d", currentRelayCount, lastRelayCount);
-        lastRelayDebugTime = now;
-    }
-    
-    return false;
-}
+
 
 // Check if SENDER state should be triggered (sent messages)
 bool LoRabotModule::shouldTriggerSender() {
@@ -745,19 +667,7 @@ PetState LoRabotModule::calculateNewState() {
         }
     }
     
-    // Check for RELAY state with 4-second duration (high priority)
-    if (inRelayState) {
-        uint32_t relayDuration = (now - relayStartTime) / 1000; // seconds
-        if (relayDuration < 4) {
-            // Remove debug logging to reduce interference
-            // LOG_DEBUG("LoRabot staying in RELAY state - duration: %d seconds", relayDuration);
-            return RELAY;
-        } else {
-            // Exit RELAY state after 4 seconds
-            inRelayState = false;
-            //LOG_DEBUG("LoRabot exiting RELAY state after 4 seconds");
-        }
-    }
+
     
     // Check for SENDER state with 3-second duration (high priority)
     if (inSenderState) {
@@ -848,8 +758,6 @@ uint32_t LoRabotModule::getUpdateInterval() {
     switch (currentState) {
         case INTENSE:
             return 4000; // Increased from 2000ms to 4000ms for INTENSE state
-        case RELAY:
-            return 6000; // Increased from 3000ms to 6000ms for RELAY state
         case SENDER:
             return 4000; // 4000ms for SENDER state
         case EXCITED:
@@ -872,7 +780,7 @@ uint32_t LoRabotModule::getUpdateInterval() {
 
 // Get current face string
 const char* LoRabotModule::getCurrentFace() {
-    if (currentState >= 12) {
+    if (currentState >= 11) {
         LOG_WARN("LoRabot invalid state: %d, using fallback", currentState);
         return (const char*)pgm_read_ptr(&FACES[AWAKE]); // Fallback to demotivated
     }

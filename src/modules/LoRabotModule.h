@@ -22,7 +22,6 @@ enum PetState : uint8_t {
     BORED,
     SLEEPY,
     GRATEFUL,
-    RELAY,
     INTENSE,
     DEMOTIVATED,
     SENDER
@@ -82,7 +81,6 @@ private:
     uint32_t messagePopupTime;
     char receivedMessageText[64];  // Store actual received message
     uint8_t funnyMessageIndex;     // Track which funny message to show
-    uint8_t relayMessageIndex;     // Track which relay message to show
     
     // INTENSE state tracking
     uint32_t messageTimes[5];      // Track last 5 message times
@@ -90,10 +88,7 @@ private:
     bool inIntenseState;           // Currently in INTENSE state
     uint32_t intenseStartTime;     // When INTENSE state started
     
-    // RELAY state tracking (relay events)
-    uint32_t lastRelayCount;       // Last known relay count
-    bool inRelayState;             // Currently in RELAY state
-    uint32_t relayStartTime;       // When RELAY state started
+
     
     // SENDER state tracking (sent messages)
     bool inSenderState;            // Currently in SENDER state
@@ -154,8 +149,7 @@ private:
     // Check if INTENSE state should be triggered
     bool shouldTriggerIntense();
     
-    // Check if RELAY state should be triggered (relay events)
-    bool shouldTriggerRelay();
+
     
     // Check if SENDER state should be triggered (sent messages)
     bool shouldTriggerSender();
@@ -168,10 +162,9 @@ private:
     void loadState();
     
     // Static arrays for faces and messages
-    static const char* const FACES[12];
-    static const char* const STATE_NAMES[12];
+    static const char* const FACES[11];
+    static const char* const STATE_NAMES[11];
     static const char* const FUNNY_MESSAGES[8];
-    static const char* const RELAY_MESSAGES[8];
     static const char* const SENDER_MESSAGES[5];
     
     // Test function for debugging
