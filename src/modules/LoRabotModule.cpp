@@ -245,7 +245,7 @@ int32_t LoRabotModule::runOnce() {
         // This is crucial for detecting DIRECT MESSAGES that don't pass through handleReceived() on the sending node
         static uint32_t lastSenderCheck = 0;
         uint32_t now = millis();
-        if (now - lastSenderCheck > 250) { // Check every 250ms for much faster response
+        if (now - lastSenderCheck > 750) { // Check every 750ms for much faster response
             lastSenderCheck = now;
             
             if (RadioLibInterface::instance && !inSenderState && !isSendingMessage) {
@@ -512,14 +512,9 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
                 lastFavoriteCountTime = now;
                 lastNodeCount = currentNodeCount;
                 
-                // Calculate actual node count excluding our own node
-                uint32_t actualNodeCount = 0;
-                for (size_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
-                    const meshtastic_NodeInfoLite* node = nodeDB->getMeshNodeByIndex(i);
-                    if (node && node->num != nodeDB->getNodeNum()) {
-                        actualNodeCount++;
-                    }
-                }
+                // Use the same node count calculation as the app (NodeStatus)
+                // This ensures consistency with what the app displays
+                uint32_t actualNodeCount = nodeDB->getNumMeshNodes();
                 
                 snprintf(cachedStatusLine, sizeof(cachedStatusLine), "Nodes:%d Friends:%d", 
                         actualNodeCount, lastFavoriteCount);
