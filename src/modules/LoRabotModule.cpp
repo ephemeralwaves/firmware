@@ -27,7 +27,7 @@ const char* const LoRabotModule::FACES[11] PROGMEM = {
     "( ^ o ^ )",    // GRATEFUL - thankful for received messages
     "( O _ O )",    // INTENSE - heavy message traffic- not implemented, WIP
     "( / _ \\ )",   // DEMOTIVATED - isolation/poor signal
-    "(  ' . ')>"   // SENDER - messages sent by user on a channel
+    "(  ' . ')>"    // SENDER - messages sent by user
 };
 
 // Human-readable state names for debugging
@@ -242,6 +242,7 @@ int32_t LoRabotModule::runOnce() {
 
         
         // ENHANCED SENDER state detection - correlates txGood increases with text message detection
+        // This is crucial for detecting DIRECT MESSAGES that don't pass through handleReceived() on the sending node
         static uint32_t lastSenderCheck = 0;
         uint32_t now = millis();
         if (now - lastSenderCheck > 1000) { // Check every second
@@ -250,16 +251,28 @@ int32_t LoRabotModule::runOnce() {
             if (RadioLibInterface::instance && !inSenderState && !isSendingMessage) {
                 uint32_t currentTxGood = RadioLibInterface::instance->txGood;
                 
-                // Check if txGood increased (we sent something)
+                // STEP 1: Check if txGood increased (we sent something)
                 if (currentTxGood > lastTxGoodCount) {
-                    // Check if we recently detected a text message transmission pattern
-                    if (pendingSenderTrigger && (now - lastTextMessageTxTime) < senderDetectionWindow) {
-                        LOG_INFO("LoRabot detected text message transmission - triggering SENDER state");
+                    uint32_t txIncrease = currentTxGood - lastTxGoodCount;
+                    
+                    // STEP 2: Try to correlate with text message detection from handleReceived()
+                    if (pendingSenderTrigger && (now - lastTextMessageTxTime) < 500) { // Reduced window for better correlation
+                        // We detected a text message pattern AND txGood increased - this is likely a text message
+                        LOG_INFO("LoRabot detected text message transmission via correlation - triggering SENDER state");
                         triggerSenderState();
                         pendingSenderTrigger = false; // Clear the flag
-                    } else {
-                        LOG_DEBUG("LoRabot detected transmission but not a text message (txGood: %d -> %d)", 
-                                  lastTxGoodCount, currentTxGood);
+                    }
+                    // STEP 3: Handle direct messages that don't pass through handleReceived()
+                    else if (!pendingSenderTrigger && txIncrease == 1) {
+                        // Single packet transmission without pending trigger - likely a direct message
+                        // Direct messages don't pass through handleReceived() on the sending node, so we need to be aggressive
+                        LOG_INFO("LoRabot detected single packet transmission - likely direct message, triggering SENDER state");
+                        triggerSenderState();
+                    }
+                    // STEP 4: Handle multiple packet transmissions (might be system packets)
+                    else {
+                        LOG_DEBUG("LoRabot detected transmission but not a text message (txGood: %d -> %d, increase: %d)", 
+                                  lastTxGoodCount, currentTxGood, txIncrease);
                     }
                     lastTxGoodCount = currentTxGood;
                 }
@@ -325,34 +338,55 @@ ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
         lastStateChange = millis();
         displayNeedsUpdate = true;
         
-        //LOG_INFO("LoRabot immediately changed to EXCITED state! Will cycle to GRATEFUL after 6 seconds.");
     } else if (mp.decoded.portnum == 1) {
-        // ENHANCED: Comprehensive text message detection for SENDER state
+        // ENHANCED: Comprehensive text message detection for SENDER state using 'to' field
+        // The 'to' field is the most reliable way to distinguish between direct messages and broadcast messages
+        // - Direct messages: mp.to = specific_node_id (e.g., 0x12345678)
+        // - Broadcast messages: mp.to = 0xffffffff (NODENUM_BROADCAST)
         uint32_t now = millis();
         bool detectedSentMessage = false;
         
-        // Check multiple conditions for detecting sent messages
+        // STEP 1: Check if this is a message from our node (either direct or broadcast)
         if (mp.from == nodeDB->getNodeNum() || isFromUs(&mp)) {
-            // Direct detection: message is from our node
-            LOG_INFO("LoRabot detected sent text message (direct) - triggering SENDER state");
-            detectedSentMessage = true;
-        } else if (mp.from == 0 && mp.decoded.source == nodeDB->getNodeNum()) {
-            // Detection via source field
-            LOG_INFO("LoRabot detected sent text message (via source) - triggering SENDER state");
-            detectedSentMessage = true;
-        } else if (mp.from == 0 && mp.to != 0xffffffff) {
-            // Direct message detection
-            LOG_INFO("LoRabot detected sent direct text message - triggering SENDER state");
-            detectedSentMessage = true;
-        } else if (mp.from == 0) {
-            // Local message detection
-            LOG_INFO("LoRabot detected sent local text message - triggering SENDER state");
-            detectedSentMessage = true;
-        } else {
-            // Enhanced pattern detection for edge cases
-            // Check if this looks like a text message we might have sent
+            // This is a message from our node - now check if it's direct or broadcast
+            if (mp.to != 0xffffffff) {
+                // DIRECT MESSAGE: Sent to a specific node (not broadcast)
+                // This works for channel messages that come back through handleReceived()
+                LOG_INFO("LoRabot detected sent DIRECT text message to node 0x%x - triggering SENDER state", mp.to);
+                detectedSentMessage = true;
+            } else {
+                // BROADCAST MESSAGE: Sent to all nodes (mp.to == 0xffffffff)
+                // This catches channel messages that are broadcast to all nodes
+                LOG_INFO("LoRabot detected sent BROADCAST text message - triggering SENDER state");
+                detectedSentMessage = true;
+            }
+        }
+        // STEP 2: Check for local messages (from=0) which might be sent messages
+        else if (mp.from == 0) {
+            // Local message (from=0) - check if it's a direct or broadcast message
+            if (mp.to != 0xffffffff) {
+                // LOCAL DIRECT MESSAGE: Local message sent to specific node
+                // This catches direct messages that are processed locally
+                LOG_INFO("LoRabot detected sent local DIRECT text message to node 0x%x - triggering SENDER state", mp.to);
+                detectedSentMessage = true;
+            } else if (mp.decoded.source == nodeDB->getNodeNum()) {
+                // LOCAL BROADCAST MESSAGE: Local message broadcast from our node
+                // This catches local broadcast messages where we're the source
+                LOG_INFO("LoRabot detected sent local BROADCAST text message - triggering SENDER state");
+                detectedSentMessage = true;
+            } else {
+                // This is a local message but not from us - might be a received message
+                LOG_DEBUG("LoRabot received local text message but not triggering SENDER - source: %d, our node: %d", 
+                          mp.decoded.source, nodeDB->getNodeNum());
+            }
+        }
+        // STEP 3: Handle edge cases and set up txGood correlation for direct messages
+        else {
+            // This is a received message from another node - not a sent message
+            // However, we can use this to set up correlation for direct messages that don't pass through handleReceived()
             if (mp.from == 0 || mp.decoded.source == nodeDB->getNodeNum()) {
-                LOG_DEBUG("LoRabot detected potential text message sending pattern - setting pending trigger");
+                // This looks like it might be related to our sending activity
+                LOG_DEBUG("LoRabot detected potential text message sending pattern - setting pending trigger for txGood correlation");
                 pendingSenderTrigger = true;
                 lastTextMessageTxTime = now;
                 isSendingMessage = true;
@@ -363,7 +397,7 @@ ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
                       mp.from, mp.decoded.source, mp.to, nodeDB->getNodeNum());
         }
         
-        // If we detected a sent message, trigger SENDER state
+        // STEP 4: Trigger SENDER state if we detected a sent message
         if (detectedSentMessage) {
             isSendingMessage = true;
             triggerSenderState();
