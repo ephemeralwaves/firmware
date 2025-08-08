@@ -107,7 +107,7 @@ struct LoRabotStepState {
 struct PetPersonality {
     uint8_t excited_threshold = 5;
     uint16_t bored_threshold_mins = 30;
-    uint8_t sleepy_start_hour = 13;
+    uint8_t sleepy_start_hour = 23;
     uint8_t sleepy_end_hour = 6;
     uint8_t friend_bond_threshold = 3;
 };
@@ -191,6 +191,7 @@ private:
     uint32_t lastLookingChange;
     uint8_t lookingCycle; // 0=left, 1=right, 2=awake
     uint32_t lastFaceAnimationTime; // Track face animation separately from thread timing
+    uint32_t lastFunnyMessageTime; // Track funny message rotation separately (every 3 seconds)
     
     // Display optimization
     char lastDisplayedFace[16];

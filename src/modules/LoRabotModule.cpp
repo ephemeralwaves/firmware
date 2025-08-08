@@ -139,6 +139,7 @@ LoRabotModule::LoRabotModule() :
     lastLookingChange = 0;
     lookingCycle = 0; // 0=left, 1=right, 2=awake
     lastFaceAnimationTime = 0; // Track face animation separately from thread timing
+    lastFunnyMessageTime = 0; // Track funny message rotation separately (every 3 seconds)
     
     // NEW: Initialize step-based execution state
     initializeStepState();
@@ -330,14 +331,7 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
     if (now - lastFaceUpdateTime > 1000) { // Update face animation every 1 second
         lastFaceUpdateTime = now;
         
-        // Update face animation cycle for idle states
-        if (currentState == AWAKE || currentState == LOOKING_AROUND_LEFT || currentState == LOOKING_AROUND_RIGHT) {
-            uint32_t faceAnimationDuration = (now - lastFaceAnimationTime) / 1000;
-            if (faceAnimationDuration > 1) {
-                lookingCycle = (lookingCycle + 1) % 3;
-                lastFaceAnimationTime = now;
-            }
-        }
+        // Face animation cycle is now handled in calculateNewState() for better state management
         
         // Cycle through SENDER messages every 2 seconds while in SENDER state
         if (currentState == SENDER && (now - lastSenderMessageUpdate) > 2000) {
@@ -451,12 +445,7 @@ void LoRabotModule::updatePetState() {
         lastStateChange = now;
         displayNeedsUpdate = true;
         
-        // Rotate funny message when changing to awake/looking states
-        if (newState == AWAKE || newState == LOOKING_AROUND_LEFT || newState == LOOKING_AROUND_RIGHT) {
-            funnyMessageIndex = (funnyMessageIndex + 1) % 8; // Rotate through 8 funny messages
-            // Remove debug logging to reduce interference
-            // LOG_DEBUG("LoRabot rotating to funny message %d", funnyMessageIndex);
-        }
+        // Note: Funny message rotation is now handled separately with 3-second timing in calculateNewState()
         
         // Reduce logging to prevent UI interference
         //LOG_DEBUG("LoRabot state changed: %d -> %d", previousState, currentState);
@@ -514,7 +503,9 @@ bool LoRabotModule::isNightTime() {
     }
     
     uint8_t hour = timeinfo.tm_hour;
+    //LOG_DEBUG("LoRabot: isNightTime - hour: %d", hour);
     return (hour >= personality.sleepy_start_hour || hour < personality.sleepy_end_hour);
+
 }
 
 // Check if battery is low
@@ -604,15 +595,15 @@ PetState LoRabotModule::calculateNewState() {
     }
     
     // Check for specific priority states first
-    if (isNightTime()) {
+    if (isNightTime() || isLowBattery()) {
         // Enter sleepy state with cycling between SLEEPY1 and SLEEPY2
         return handleSleepyStateCycling();
     } else {
-        // Reset sleepy state when we're no longer in sleepy conditions
-        if (inSleepyState) {
-            inSleepyState = false;
-            LOG_DEBUG("LoRabot: Exiting sleepy state");
-        }
+        // Force exit from sleepy state since isNightTime() and isLowBattery() are both false
+        inSleepyState = false;
+        currentState = AWAKE;
+        displayNeedsUpdate = true;
+        //LOG_DEBUG("LoRabot: Forcing exit from sleepy state to AWAKE");
     }
     
     // Check for recent node discovery (highest priority) - show HAPPY when new node found
@@ -625,31 +616,44 @@ PetState LoRabotModule::calculateNewState() {
     // Default behavior: AWAKE state, then looking states when nodes are present
     if (currentNodeCount > 0) {
         // 3-state cycle: Looking Left → Looking Right → Awake → repeat
-        // Use faster face animation (1 second) while keeping thread performance optimized
-        uint32_t faceAnimationDuration = (now - lastFaceAnimationTime) / 1000; // seconds
-        if (faceAnimationDuration > 1) { // Change face every 1 second for more lively animation
+        // Check if it's time to cycle (every 1 second for visible animation)
+        if ((now - lastFaceAnimationTime) >= 1000) {
             lookingCycle = (lookingCycle + 1) % 3; // Cycle through 0,1,2
             lastFaceAnimationTime = now;
-            // Remove debug logging to reduce interference
-            // LOG_DEBUG("LoRabot changing animation cycle to: %d", lookingCycle);
+            
+            // DIRECTLY update currentState and trigger UI redraw
+            switch (lookingCycle) {
+                case 0: // Looking Left
+                    currentState = LOOKING_AROUND_LEFT;
+                    displayNeedsUpdate = true;
+                    LOG_DEBUG("LoRabot: Cycling to LOOKING_AROUND_LEFT");
+                    break;
+                case 1: // Looking Right
+                    currentState = LOOKING_AROUND_RIGHT;
+                    displayNeedsUpdate = true;
+                    LOG_DEBUG("LoRabot: Cycling to LOOKING_AROUND_RIGHT");
+                    break;
+                case 2: // Awake
+                    currentState = AWAKE;
+                    displayNeedsUpdate = true;
+                    LOG_DEBUG("LoRabot: Cycling to AWAKE");
+                    break;
+                default:
+                    currentState = AWAKE;
+                    displayNeedsUpdate = true;
+                    break;
+            }
         }
         
-        switch (lookingCycle) {
-            case 0: // Looking Left
-                // Remove debug logging to reduce interference
-                // LOG_DEBUG("LoRabot in LOOKING LEFT state (nodes: %d)", currentNodeCount);
-                return LOOKING_AROUND_LEFT;
-            case 1: // Looking Right
-                // Remove debug logging to reduce interference
-                // LOG_DEBUG("LoRabot in LOOKING RIGHT state (nodes: %d)", currentNodeCount);
-                return LOOKING_AROUND_RIGHT;
-            case 2: // Awake
-                // Remove debug logging to reduce interference
-                // LOG_DEBUG("LoRabot in AWAKE state (nodes: %d)", currentNodeCount);
-                return AWAKE;
-            default:
-                return AWAKE;
+        // Rotate funny messages every 3 seconds (independent of face animation)
+        if ((now - lastFunnyMessageTime) >= 3000) {
+            funnyMessageIndex = (funnyMessageIndex + 1) % 8; // Rotate through 8 funny messages
+            lastFunnyMessageTime = now;
+            LOG_DEBUG("LoRabot: Rotating funny message to index %d", funnyMessageIndex);
         }
+        
+        // Return current state (should match currentState now)
+        return currentState;
     }
     
     // No nodes present - stay in AWAKE state
