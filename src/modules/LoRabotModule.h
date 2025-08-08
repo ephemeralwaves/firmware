@@ -27,14 +27,13 @@ enum PetState : uint8_t {
     SENDER
 };
 
-// Message flow classification for better packet detection
-enum MessageFlow : uint8_t {
-    MY_DIRECT_TO_OTHER = 0,      // I'm sending directly to someone
-    OTHER_DIRECT_TO_ME,          // Someone sending directly to me  
-    MY_BROADCAST,                // I'm broadcasting
-    OTHER_BROADCAST,             // Someone else broadcasting
-    RELAYED_MESSAGE,             // Multi-hop message
-    UNKNOWN_MESSAGE
+// Text message direction classification - focused on social behavior
+enum TextMessageDirection : uint8_t {
+    MY_TEXT_TO_SOMEONE = 0,      // I sent a text message to someone
+    TEXT_TO_ME_DIRECT,           // Someone sent me a direct text
+    TEXT_BROADCAST_BY_ME,        // I sent a broadcast text
+    TEXT_BROADCAST_BY_OTHER,     // Someone else broadcast text
+    TEXT_RELAYED                 // Multi-hop text message
 };
 
 // Message type classification for social significance
@@ -46,18 +45,12 @@ enum MessageType : uint8_t {
     IGNORED_MESSAGE              // Messages we don't care about
 };
 
-// Required data points for message direction detection
-struct MessageAnalysis {
-    bool isFromMyNode;          // mp.from == myNodeNum
-    bool isDirectMessage;       // mp.to != BROADCAST_NUM  
-    bool isToSpecificNode;      // mp.to is a valid node ID
-    bool isFirstHop;            // mp.hop_start == mp.hop_limit
+// Text message analysis structure
+struct TextMessageAnalysis {
+    TextMessageDirection direction;
     NodeNum myNodeNum;
     NodeNum recipientNodeNum;
     NodeNum senderNodeNum;
-    MessageFlow flow;
-    MessageType socialType;
-    int socialWeight;
     bool shouldReact;
     PetState suggestedState;
 };
@@ -196,11 +189,11 @@ private:
     void saveState();
     void loadState();
     
-    // NEW: Core message detection functions
-    bool isMyDirectMessageToOther(const meshtastic_MeshPacket &mp);
-    MessageFlow analyzeMessageFlow(const meshtastic_MeshPacket &mp);
-    MessageType classifyMessageBySocialValue(const meshtastic_MeshPacket &mp);
-    MessageAnalysis analyzeMessage(const meshtastic_MeshPacket &mp);
+    // NEW: Text message detection functions
+    bool isMyOutgoingTextMessage(const meshtastic_MeshPacket &mp);
+    bool isIncomingTextMessage(const meshtastic_MeshPacket &mp);
+    TextMessageDirection analyzeTextMessage(const meshtastic_MeshPacket &mp);
+    TextMessageAnalysis analyzeTextMessageDirection(const meshtastic_MeshPacket &mp);
     
     // Static arrays for faces and messages
     static const char* const FACES[11];
