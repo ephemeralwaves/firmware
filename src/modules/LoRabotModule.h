@@ -36,6 +36,15 @@ enum TextMessageDirection : uint8_t {
     TEXT_RELAYED                 // Multi-hop text message
 };
 
+// Node discovery classification - focused on social behavior
+enum NodeDiscoveryType : uint8_t {
+    NEW_NODE_DISCOVERED = 0,     // Found a new node in the mesh
+    NODE_COUNT_CHANGED,          // Node count changed but no new node
+    NODE_COUNT_UNCHANGED,        // No change in node count
+    FIRST_BOOT_DETECTION,        // First boot, don't trigger HAPPY
+    SENDING_INTERFERENCE         // Currently sending, don't trigger HAPPY
+};
+
 // Message type classification for social significance
 enum MessageType : uint8_t {
     SOCIAL_MESSAGE = 0,          // Text messages, direct communication
@@ -53,6 +62,17 @@ struct TextMessageAnalysis {
     NodeNum senderNodeNum;
     bool shouldReact;
     PetState suggestedState;
+};
+
+// Node discovery analysis structure
+struct NodeDiscoveryAnalysis {
+    NodeDiscoveryType discoveryType;
+    size_t totalNodeCount;
+    size_t previousNodeCount;
+    const meshtastic_NodeInfoLite* newestNode;
+    char nodeName[32];
+    bool shouldTriggerHappy;
+    bool shouldUpdateCount;
 };
 
 // Personality configuration
@@ -194,6 +214,10 @@ private:
     bool isIncomingTextMessage(const meshtastic_MeshPacket &mp);
     TextMessageDirection analyzeTextMessage(const meshtastic_MeshPacket &mp);
     TextMessageAnalysis analyzeTextMessageDirection(const meshtastic_MeshPacket &mp);
+    
+    // NEW: Node discovery detection functions
+    NodeDiscoveryType analyzeNodeDiscovery(size_t totalNodeCount, size_t previousNodeCount);
+    NodeDiscoveryAnalysis analyzeNodeDiscoveryDirection(size_t totalNodeCount, size_t previousNodeCount);
     
     // Static arrays for faces and messages
     static const char* const FACES[11];

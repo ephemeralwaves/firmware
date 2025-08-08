@@ -154,62 +154,35 @@ int32_t LoRabotModule::runOnce() {
     // Update pet state based on network activity and time
     updatePetState();
     
-        // Monitor for new nodes by checking total node count - only check every few cycles
-    static uint8_t nodeCheckCounter = 0;
-    nodeCheckCounter++;
-    if (nodeCheckCounter >= 4) { // Only check every 4 cycles (much less frequent)
-        nodeCheckCounter = 0;
-        size_t totalNodeCount = nodeDB->getNumMeshNodes();
-        
-        // Only process if node count actually changed AND we're not on first boot
-        if (totalNodeCount != currentNodeCount && currentNodeCount > 0) {
-            // Check if this is actually a new node discovery (not just us sending a message)
-            // Look for the node that was most recently heard
-            const meshtastic_NodeInfoLite* newestNode = nullptr;
-            uint32_t newestTime = 0;
-            bool foundNewNode = false;
+        // NEW: Clean switch-based node discovery detection
+        static uint8_t nodeCheckCounter = 0;
+        nodeCheckCounter++;
+        if (nodeCheckCounter >= 4) { // Only check every 4 cycles (much less frequent)
+            nodeCheckCounter = 0;
+            size_t totalNodeCount = nodeDB->getNumMeshNodes();
             
-            for (size_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
-                const meshtastic_NodeInfoLite* node = nodeDB->getMeshNodeByIndex(i);
-                if (node && node->num != nodeDB->getNodeNum()) {
-                    // Don't include our own node
-                    if (node->last_heard > newestTime) {
-                        newestNode = node;
-                        newestTime = node->last_heard;
-                    }
-                    
-                    // Check if this node was not in our previous count
-                    bool isNewNode = true;
-                    for (size_t j = 0; j < currentNodeCount; j++) {
-                        const meshtastic_NodeInfoLite* oldNode = nodeDB->getMeshNodeByIndex(j);
-                        if (oldNode && oldNode->num == node->num) {
-                            isNewNode = false;
-                            break;
-                        }
-                    }
-                    if (isNewNode) {
-                        foundNewNode = true;
-                    }
-                }
+            // Use the clean analysis system for node discovery
+            NodeDiscoveryAnalysis analysis = analyzeNodeDiscoveryDirection(totalNodeCount, currentNodeCount);
+            
+            if (analysis.shouldUpdateCount) {
+                // Update current node count
+                currentNodeCount = totalNodeCount;
+                processNetworkEvent();
+                
+                // Clear cached status line when node count changes so it gets recalculated
+                static char cachedStatusLine[32] = "";
+                cachedStatusLine[0] = '\0'; // Clear the cache
             }
             
-            // Only trigger HAPPY state if we found an actual new node and we're not currently sending
-            if (foundNewNode && newestNode && newestNode->num != nodeDB->getNodeNum() && !isSendingMessage) {
-                // New node discovered
+            if (analysis.shouldTriggerHappy) {
+                // New node discovered - trigger HAPPY state
                 lastDiscoveredNode = totalNodeCount;
                 nodeDiscoveryTime = millis();
                 showingNewNode = true;
                 
-                if (newestNode->has_user && strlen(newestNode->user.long_name) > 0) {
-                    // Use the actual node name with "Hello Node" prefix
-                    snprintf(lastNodeName, sizeof(lastNodeName), "Hello %s!", newestNode->user.long_name);
-                } else if (newestNode->has_user && strlen(newestNode->user.short_name) > 0) {
-                    // Fallback to short name if long name is not available
-                    snprintf(lastNodeName, sizeof(lastNodeName), "Hello %s!", newestNode->user.short_name);
-                } else {
-                    // Fallback to generic name (node number) - format as hex for better readability
-                    snprintf(lastNodeName, sizeof(lastNodeName), "Hello Node 0x%x!", newestNode->num);
-                }
+                // Copy the analyzed node name
+                strncpy(lastNodeName, analysis.nodeName, sizeof(lastNodeName) - 1);
+                lastNodeName[sizeof(lastNodeName) - 1] = '\0'; // Ensure null termination
                 
                 // Immediately trigger HAPPY state for new node discovery
                 previousState = currentState;
@@ -219,14 +192,6 @@ int32_t LoRabotModule::runOnce() {
                 
                 LOG_DEBUG("LoRabot discovered new node: %s! Total nodes: %d", lastNodeName, totalNodeCount);
             }
-            
-            // Update current node count
-            currentNodeCount = totalNodeCount;
-            processNetworkEvent();
-            
-            // Clear cached status line when node count changes so it gets recalculated
-            static char cachedStatusLine[32] = "";
-            cachedStatusLine[0] = '\0'; // Clear the cache
         }
         
         // Clear the "showing new node" flag after timeout
@@ -240,7 +205,6 @@ int32_t LoRabotModule::runOnce() {
             isSendingMessage = false;
             LOG_DEBUG("LoRabot clearing stuck sending flag");
         }
-    }
     
 
         
@@ -746,7 +710,7 @@ PetState LoRabotModule::calculateNewState() {
 
 // Get update interval based on current state and activity
 uint32_t LoRabotModule::getUpdateInterval() {
-    uint32_t baseInterval = 8000; // Increased from 4000ms to 8000ms baseline for much better performance
+    uint32_t baseInterval = 4000; // 4000ms baseline for much better performance
     
     switch (currentState) {
         case INTENSE:
@@ -943,6 +907,114 @@ TextMessageAnalysis LoRabotModule::analyzeTextMessageDirection(const meshtastic_
             // Just background chatter
             analysis.shouldReact = false;
             LOG_DEBUG("LoRabot: Relayed text message - not reacting");
+            break;
+    }
+    
+    return analysis;
+}
+
+// NEW: Analyze node discovery type for social behavior
+NodeDiscoveryType LoRabotModule::analyzeNodeDiscovery(size_t totalNodeCount, size_t previousNodeCount) {
+    // Check for first boot (no previous nodes)
+    if (previousNodeCount == 0) {
+        LOG_DEBUG("LoRabot node discovery: FIRST_BOOT_DETECTION");
+        return FIRST_BOOT_DETECTION;
+    }
+    
+    // Check if currently sending (interference)
+    if (isSendingMessage) {
+        LOG_DEBUG("LoRabot node discovery: SENDING_INTERFERENCE");
+        return SENDING_INTERFERENCE;
+    }
+    
+    // Check if node count increased (new node discovered)
+    if (totalNodeCount > previousNodeCount) {
+        LOG_DEBUG("LoRabot node discovery: NEW_NODE_DISCOVERED (from %d to %d)", previousNodeCount, totalNodeCount);
+        return NEW_NODE_DISCOVERED;
+    }
+    
+    // Check if node count changed (but decreased)
+    if (totalNodeCount != previousNodeCount) {
+        LOG_DEBUG("LoRabot node discovery: NODE_COUNT_CHANGED (from %d to %d)", previousNodeCount, totalNodeCount);
+        return NODE_COUNT_CHANGED;
+    }
+    
+    // No change in node count
+    LOG_DEBUG("LoRabot node discovery: NODE_COUNT_UNCHANGED (%d)", totalNodeCount);
+    return NODE_COUNT_UNCHANGED;
+}
+
+// NEW: Complete node discovery analysis with switch-based logic
+NodeDiscoveryAnalysis LoRabotModule::analyzeNodeDiscoveryDirection(size_t totalNodeCount, size_t previousNodeCount) {
+    NodeDiscoveryAnalysis analysis;
+    
+    // Initialize analysis
+    analysis.discoveryType = analyzeNodeDiscovery(totalNodeCount, previousNodeCount);
+    analysis.totalNodeCount = totalNodeCount;
+    analysis.previousNodeCount = previousNodeCount;
+    analysis.newestNode = nullptr;
+    memset(analysis.nodeName, 0, sizeof(analysis.nodeName));
+    analysis.shouldTriggerHappy = false;
+    analysis.shouldUpdateCount = false;
+    
+    // Switch-based analysis for clean, readable logic
+    switch (analysis.discoveryType) {
+        case NEW_NODE_DISCOVERED: {
+            // Find the newest node and prepare HAPPY state
+            analysis.shouldTriggerHappy = true;
+            analysis.shouldUpdateCount = true;
+            
+            // Look for the node that was most recently heard
+            uint32_t newestTime = 0;
+            for (size_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
+                const meshtastic_NodeInfoLite* node = nodeDB->getMeshNodeByIndex(i);
+                if (node && node->num != nodeDB->getNodeNum()) {
+                    // Don't include our own node
+                    if (node->last_heard > newestTime) {
+                        analysis.newestNode = node;
+                        newestTime = node->last_heard;
+                    }
+                }
+            }
+            
+            // Generate node name based on available information
+            if (analysis.newestNode) {
+                if (analysis.newestNode->has_user && strlen(analysis.newestNode->user.long_name) > 0) {
+                    // Use the actual node name with "Hello Node" prefix
+                    snprintf(analysis.nodeName, sizeof(analysis.nodeName), "Hello %s!", analysis.newestNode->user.long_name);
+                } else if (analysis.newestNode->has_user && strlen(analysis.newestNode->user.short_name) > 0) {
+                    // Fallback to short name if long name is not available
+                    snprintf(analysis.nodeName, sizeof(analysis.nodeName), "Hello %s!", analysis.newestNode->user.short_name);
+                } else {
+                    // Fallback to generic name (node number) - format as hex for better readability
+                    snprintf(analysis.nodeName, sizeof(analysis.nodeName), "Hello Node 0x%x!", analysis.newestNode->num);
+                }
+            }
+            
+            LOG_INFO("LoRabot: New node discovered - triggering HAPPY state");
+            break;
+        }
+            
+        case NODE_COUNT_CHANGED:
+            // Node count changed but not a new node discovery
+            analysis.shouldUpdateCount = true;
+            LOG_DEBUG("LoRabot: Node count changed but not triggering HAPPY state");
+            break;
+            
+        case NODE_COUNT_UNCHANGED:
+            // No change in node count
+            LOG_DEBUG("LoRabot: Node count unchanged (%d)", totalNodeCount);
+            break;
+            
+        case FIRST_BOOT_DETECTION:
+            // First boot, don't trigger HAPPY state
+            analysis.shouldUpdateCount = true;
+            LOG_DEBUG("LoRabot: First boot detection - not triggering HAPPY state");
+            break;
+            
+        case SENDING_INTERFERENCE:
+            // Currently sending, don't trigger HAPPY state
+            LOG_DEBUG("LoRabot: Sending interference - not triggering HAPPY state");
             break;
     }
     
