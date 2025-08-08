@@ -27,6 +27,41 @@ enum PetState : uint8_t {
     SENDER
 };
 
+// Message flow classification for better packet detection
+enum MessageFlow : uint8_t {
+    MY_DIRECT_TO_OTHER = 0,      // I'm sending directly to someone
+    OTHER_DIRECT_TO_ME,          // Someone sending directly to me  
+    MY_BROADCAST,                // I'm broadcasting
+    OTHER_BROADCAST,             // Someone else broadcasting
+    RELAYED_MESSAGE,             // Multi-hop message
+    UNKNOWN_MESSAGE
+};
+
+// Message type classification for social significance
+enum MessageType : uint8_t {
+    SOCIAL_MESSAGE = 0,          // Text messages, direct communication
+    INFO_MESSAGE,                // Position updates, node info
+    TECHNICAL_MESSAGE,           // Telemetry, routing packets
+    BACKGROUND_MESSAGE,          // System packets, noise
+    IGNORED_MESSAGE              // Messages we don't care about
+};
+
+// Required data points for message direction detection
+struct MessageAnalysis {
+    bool isFromMyNode;          // mp.from == myNodeNum
+    bool isDirectMessage;       // mp.to != BROADCAST_NUM  
+    bool isToSpecificNode;      // mp.to is a valid node ID
+    bool isFirstHop;            // mp.hop_start == mp.hop_limit
+    NodeNum myNodeNum;
+    NodeNum recipientNodeNum;
+    NodeNum senderNodeNum;
+    MessageFlow flow;
+    MessageType socialType;
+    int socialWeight;
+    bool shouldReact;
+    PetState suggestedState;
+};
+
 // Personality configuration
 struct PetPersonality {
     uint8_t excited_threshold = 5;
@@ -160,6 +195,12 @@ private:
     const char* getCurrentFace();
     void saveState();
     void loadState();
+    
+    // NEW: Core message detection functions
+    bool isMyDirectMessageToOther(const meshtastic_MeshPacket &mp);
+    MessageFlow analyzeMessageFlow(const meshtastic_MeshPacket &mp);
+    MessageType classifyMessageBySocialValue(const meshtastic_MeshPacket &mp);
+    MessageAnalysis analyzeMessage(const meshtastic_MeshPacket &mp);
     
     // Static arrays for faces and messages
     static const char* const FACES[11];

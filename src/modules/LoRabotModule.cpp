@@ -344,68 +344,37 @@ ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
         displayNeedsUpdate = true;
         
     } else if (mp.decoded.portnum == 1) {
-        // ENHANCED: Comprehensive text message detection for SENDER state using 'to' field
-        // The 'to' field is the most reliable way to distinguish between direct messages and broadcast messages
-        // - Direct messages: mp.to = specific_node_id (e.g., 0x12345678)
-        // - Broadcast messages: mp.to = 0xffffffff (NODENUM_BROADCAST)
+        // NEW: Focused detection using core detection function
         uint32_t now = millis();
-        bool detectedSentMessage = false;
         
-        // STEP 1: Check if this is a message from our node (either direct or broadcast)
-        if (mp.from == nodeDB->getNodeNum() || isFromUs(&mp)) {
-            // This is a message from our node - now check if it's direct or broadcast
-            if (mp.to != 0xffffffff) {
-                // DIRECT MESSAGE: Sent to a specific node (not broadcast)
-                // This works for channel messages that come back through handleReceived()
-                LOG_INFO("LoRabot detected sent DIRECT text message to node 0x%x - triggering SENDER state", mp.to);
-                detectedSentMessage = true;
-            } else {
-                // BROADCAST MESSAGE: Sent to all nodes (mp.to == 0xffffffff)
-                // This catches channel messages that are broadcast to all nodes
-                LOG_INFO("LoRabot detected sent BROADCAST text message - triggering SENDER state");
-                detectedSentMessage = true;
-            }
-        }
-        // STEP 2: Check for local messages (from=0) which might be sent messages
-        else if (mp.from == 0) {
-            // Local message (from=0) - check if it's a direct or broadcast message
-            if (mp.to != 0xffffffff) {
-                // LOCAL DIRECT MESSAGE: Local message sent to specific node
-                // This catches direct messages that are processed locally
-                LOG_INFO("LoRabot detected sent local DIRECT text message to node 0x%x - triggering SENDER state", mp.to);
-                detectedSentMessage = true;
-            } else if (mp.decoded.source == nodeDB->getNodeNum()) {
-                // LOCAL BROADCAST MESSAGE: Local message broadcast from our node
-                // This catches local broadcast messages where we're the source
-                LOG_INFO("LoRabot detected sent local BROADCAST text message - triggering SENDER state");
-                detectedSentMessage = true;
-            } else {
-                // This is a local message but not from us - might be a received message
-                LOG_DEBUG("LoRabot received local text message but not triggering SENDER - source: %d, our node: %d", 
-                          mp.decoded.source, nodeDB->getNodeNum());
-            }
-        }
-        // STEP 3: Handle edge cases and set up txGood correlation for direct messages
-        else {
-            // This is a received message from another node - not a sent message
-            // However, we can use this to set up correlation for direct messages that don't pass through handleReceived()
-            if (mp.from == 0 || mp.decoded.source == nodeDB->getNodeNum()) {
-                // This looks like it might be related to our sending activity
-                LOG_DEBUG("LoRabot detected potential text message sending pattern - setting pending trigger for txGood correlation");
-                pendingSenderTrigger = true;
-                lastTextMessageTxTime = now;
-                isSendingMessage = true;
-            }
-            
-            // Debug: log text messages that don't trigger SENDER state
-            LOG_DEBUG("LoRabot received text message but not triggering SENDER - from: %d, source: %d, to: 0x%x, our node: %d", 
-                      mp.from, mp.decoded.source, mp.to, nodeDB->getNodeNum());
-        }
-        
-        // STEP 4: Trigger SENDER state if we detected a sent message
-        if (detectedSentMessage) {
+        // Use the core detection function for direct messages
+        if (isMyDirectMessageToOther(mp)) {
+            LOG_INFO("LoRabot detected MY_DIRECT_TO_OTHER text message - triggering SENDER state");
             isSendingMessage = true;
             triggerSenderState();
+        } else {
+            // Check for other message types using the analysis system
+            MessageAnalysis analysis = analyzeMessage(mp);
+            
+            if (analysis.shouldReact) {
+                switch (analysis.flow) {
+                    case MY_BROADCAST:
+                        LOG_INFO("LoRabot detected MY_BROADCAST text message - triggering SENDER state");
+                        isSendingMessage = false;
+                        //triggerSenderState();
+                        break;
+                        
+                    case OTHER_DIRECT_TO_ME:
+                    case OTHER_BROADCAST:
+                        LOG_INFO("LoRabot detected received text message - triggering EXCITED state");
+                        // This will be handled by the existing EXCITED logic above
+                        break;
+                        
+                    default:
+                        LOG_DEBUG("LoRabot received text message but not triggering SENDER - flow: %d", analysis.flow);
+                        break;
+                }
+            }
         }
     } else {
         // Debug: log all received packets to see what's happening
@@ -861,4 +830,174 @@ void LoRabotModule::loadState() {
         
         prefs.end();
     }
+}
+
+// NEW: Core detection function for direct messages from my node
+bool LoRabotModule::isMyDirectMessageToOther(const meshtastic_MeshPacket &mp) {
+    NodeNum myNodeNum = nodeDB->getNodeNum();
+    
+    bool isDirectMessage = (mp.from == myNodeNum) &&                    // From me
+                          (mp.to != NODENUM_BROADCAST) &&              // Not broadcast  
+                          (mp.to != myNodeNum) &&                      // Not to myself
+                          (mp.to != 0) &&                             // Valid recipient
+                          (mp.hop_start == mp.hop_limit) &&           // First hop
+                          (mp.hop_limit > 0);                         // Valid hop count
+    
+    LOG_DEBUG("LoRabot isMyDirectMessageToOther - from: 0x%x, to: 0x%x, myNode: 0x%x, hop_start: %d, hop_limit: %d, isDirect: %s", 
+              mp.from, mp.to, myNodeNum, mp.hop_start, mp.hop_limit, isDirectMessage ? "YES" : "NO");
+    
+    return isDirectMessage;
+}
+
+// NEW: Analyze message flow to determine packet type and direction
+MessageFlow LoRabotModule::analyzeMessageFlow(const meshtastic_MeshPacket &mp) {
+    NodeNum myNodeNum = nodeDB->getNodeNum();
+    bool isFromMe = (mp.from == myNodeNum);
+    bool isBroadcast = (mp.to == NODENUM_BROADCAST || mp.to == 0xffffffff);
+    bool isToMe = (mp.to == myNodeNum);
+    bool isFirstHop = (mp.hop_start == mp.hop_limit && mp.hop_limit > 0);
+    
+    LOG_DEBUG("LoRabot analyzeMessageFlow - from: 0x%x, to: 0x%x, myNode: 0x%x, isFromMe: %s, isBroadcast: %s, isToMe: %s, isFirstHop: %s", 
+              mp.from, mp.to, myNodeNum, isFromMe ? "YES" : "NO", isBroadcast ? "YES" : "NO", isToMe ? "YES" : "NO", isFirstHop ? "YES" : "NO");
+    
+    if (isFromMe) {
+        if (isBroadcast) {
+            LOG_DEBUG("LoRabot message flow: MY_BROADCAST");
+            return MY_BROADCAST;
+        } else {
+            LOG_DEBUG("LoRabot message flow: MY_DIRECT_TO_OTHER");
+            return MY_DIRECT_TO_OTHER;  // This is what we want to detect for SENDER state!
+        }
+    }
+    
+    if (isToMe && !isBroadcast) {
+        LOG_DEBUG("LoRabot message flow: OTHER_DIRECT_TO_ME");
+        return OTHER_DIRECT_TO_ME;
+    }
+    
+    if (isBroadcast && isFirstHop) {
+        LOG_DEBUG("LoRabot message flow: OTHER_BROADCAST");
+        return OTHER_BROADCAST;
+    }
+    
+    if (!isFirstHop) {
+        LOG_DEBUG("LoRabot message flow: RELAYED_MESSAGE");
+        return RELAYED_MESSAGE;
+    }
+    
+    LOG_DEBUG("LoRabot message flow: UNKNOWN_MESSAGE");
+    return UNKNOWN_MESSAGE;
+}
+
+// NEW: Classify message by social significance using switch statement
+MessageType LoRabotModule::classifyMessageBySocialValue(const meshtastic_MeshPacket &mp) {
+    switch (mp.decoded.portnum) {
+        case 1:  // TEXT_MESSAGE_APP
+            LOG_DEBUG("LoRabot message type: SOCIAL_MESSAGE (text)");
+            return SOCIAL_MESSAGE;
+            
+        case 3:  // POSITION_APP
+            LOG_DEBUG("LoRabot message type: INFO_MESSAGE (position)");
+            return INFO_MESSAGE;
+            
+        case 4:  // NODEINFO_APP
+            LOG_DEBUG("LoRabot message type: INFO_MESSAGE (nodeinfo)");
+            return INFO_MESSAGE;
+            
+        case 5:  // ROUTING_APP
+            LOG_DEBUG("LoRabot message type: TECHNICAL_MESSAGE (routing)");
+            return TECHNICAL_MESSAGE;
+            
+        case 67: // TELEMETRY_APP
+            LOG_DEBUG("LoRabot message type: TECHNICAL_MESSAGE (telemetry)");
+            return TECHNICAL_MESSAGE;
+            
+        default:
+            LOG_DEBUG("LoRabot message type: BACKGROUND_MESSAGE (port %d)", mp.decoded.portnum);
+            return BACKGROUND_MESSAGE;
+    }
+}
+
+// NEW: Complete message analysis with switch-based state suggestions
+MessageAnalysis LoRabotModule::analyzeMessage(const meshtastic_MeshPacket &mp) {
+    MessageAnalysis analysis;
+    NodeNum myNodeNum = nodeDB->getNodeNum();
+    
+    // Determine message flow
+    analysis.flow = analyzeMessageFlow(mp);
+    
+    // Classify by social significance
+    analysis.socialType = classifyMessageBySocialValue(mp);
+    
+    // Initialize analysis
+    analysis.socialWeight = 0;
+    analysis.shouldReact = false;
+    analysis.suggestedState = AWAKE; // Default state
+    
+    // Switch-based analysis for clean, readable logic
+    switch (analysis.socialType) {
+        case SOCIAL_MESSAGE:
+            analysis.socialWeight = 3;
+            analysis.shouldReact = true;
+            
+            switch (analysis.flow) {
+                case MY_DIRECT_TO_OTHER:
+                    analysis.suggestedState = SENDER;      // I'm being social!
+                    analysis.socialWeight = 5;
+                    LOG_DEBUG("LoRabot analysis: MY_DIRECT_TO_OTHER + SOCIAL_MESSAGE = SENDER");
+                    break;
+                    
+                case OTHER_DIRECT_TO_ME:
+                    analysis.suggestedState = EXCITED;     // Someone's talking to me!
+                    analysis.socialWeight = 4;
+                    LOG_DEBUG("LoRabot analysis: OTHER_DIRECT_TO_ME + SOCIAL_MESSAGE = EXCITED");
+                    break;
+                    
+                case MY_BROADCAST:
+                    analysis.suggestedState = SENDER;      // I'm broadcasting!
+                    analysis.socialWeight = 4;
+                    LOG_DEBUG("LoRabot analysis: MY_BROADCAST + SOCIAL_MESSAGE = SENDER");
+                    break;
+                    
+                case OTHER_BROADCAST:
+                    analysis.suggestedState = EXCITED;     // General chatter
+                    analysis.socialWeight = 3;
+                    LOG_DEBUG("LoRabot analysis: OTHER_BROADCAST + SOCIAL_MESSAGE = EXCITED");
+                    break;
+                    
+                default:
+                    analysis.suggestedState = HAPPY;       // Other social messages
+                    LOG_DEBUG("LoRabot analysis: OTHER + SOCIAL_MESSAGE = HAPPY");
+                    break;
+            }
+            break;
+            
+        case INFO_MESSAGE:
+            analysis.socialWeight = 2;
+            analysis.shouldReact = true;
+            analysis.suggestedState = LOOKING_AROUND_LEFT; // Looking around for info
+            LOG_DEBUG("LoRabot analysis: INFO_MESSAGE = LOOKING_AROUND_LEFT");
+            break;
+            
+        case TECHNICAL_MESSAGE:
+            analysis.socialWeight = 1;
+            analysis.shouldReact = true;
+            analysis.suggestedState = INTENSE;             // Technical activity
+            LOG_DEBUG("LoRabot analysis: TECHNICAL_MESSAGE = INTENSE");
+            break;
+            
+        case BACKGROUND_MESSAGE:
+            analysis.socialWeight = 0;
+            analysis.shouldReact = false;                  // Don't react to noise
+            LOG_DEBUG("LoRabot analysis: BACKGROUND_MESSAGE = IGNORE");
+            break;
+            
+        case IGNORED_MESSAGE:
+        default:
+            analysis.shouldReact = false;
+            LOG_DEBUG("LoRabot analysis: IGNORED_MESSAGE = IGNORE");
+            break;
+    }
+    
+    return analysis;
 }
