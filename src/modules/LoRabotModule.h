@@ -19,8 +19,8 @@ enum PetState : uint8_t {
     LOOKING_AROUND_LEFT,
     HAPPY,
     EXCITED,
-    BORED,
-    SLEEPY,
+    SLEEPY1,         // Renamed from BORED
+    SLEEPY2,         // Renamed from SLEEPY
     GRATEFUL,
     INTENSE,
     DEMOTIVATED,
@@ -107,7 +107,7 @@ struct LoRabotStepState {
 struct PetPersonality {
     uint8_t excited_threshold = 5;
     uint16_t bored_threshold_mins = 30;
-    uint8_t sleepy_start_hour = 24;
+    uint8_t sleepy_start_hour = 13;
     uint8_t sleepy_end_hour = 6;
     uint8_t friend_bond_threshold = 3;
 };
@@ -173,6 +173,12 @@ private:
     
     // Track when we're sending to prevent interference with node discovery
     bool isSendingMessage;
+    
+    // SLEEPY state cycling tracking
+    bool inSleepyState;               // Currently in sleepy state (either SLEEPY1 or SLEEPY2)
+    uint32_t sleepyStartTime;         // When we entered sleepy state
+    uint32_t lastSleepyCycleTime;     // Last time we cycled between SLEEPY1 and SLEEPY2
+    bool currentSleepyFace;           // false = SLEEPY1, true = SLEEPY2
     
     // NEW: Enhanced SENDER state detection
     uint32_t lastTxGoodCount;      // Last known txGood count
@@ -240,6 +246,9 @@ private:
     const char* getCurrentFace();
     void saveState();
     void loadState();
+    
+    // SLEEPY state cycling function
+    PetState handleSleepyStateCycling();
     
     // NEW: Text message detection functions
     bool isMyOutgoingTextMessage(const meshtastic_MeshPacket &mp);

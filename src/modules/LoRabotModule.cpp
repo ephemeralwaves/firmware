@@ -22,12 +22,12 @@ const char* const LoRabotModule::FACES[11] PROGMEM = {
     "( < . < )",    // LOOKING_AROUND - scanning for nodes (left)
     "( ^ - ^ )",    // HAPPY - new nodes found
     "( * o * )",    // EXCITED - messages received (triggers excited/grateful cycle)
-    "( - _ - )",    // BORED - no network activity - not implemented, WIP
-    "( ~ _ ~ )",    // SLEEPY - night hours/low power
+    "( ~ o ~ )",    // SLEEPY1 - night hours
+    "( ~ - ~ )",    // SLEEPY2 - night hours
     "( ^ o ^ )",    // GRATEFUL - thankful for received messages
     "( O _ O )",    // INTENSE - heavy message traffic- not implemented, WIP
-    "( / _ \\ )",   // DEMOTIVATED - isolation/poor signal
-    "(  ' . ')>"    // SENDER - messages sent by user
+    "( v _ v )",    // DEMOTIVATED - low battery
+    "(  ' . ')>"    // SENDER - messages sent by node, can be any type of data (text, position, telemetry, etc.)
 };
 
 // Human-readable state names for debugging
@@ -37,8 +37,8 @@ const char* const LoRabotModule::STATE_NAMES[11] PROGMEM = {
     "Looking L",
     "Happy", 
     "Excited",
-    "Bored",
-    "Sleepy",
+    "Sleepy1",   
+    "Sleepy2",    
     "Grateful",
     "Intense",
     "Sad",
@@ -121,6 +121,12 @@ LoRabotModule::LoRabotModule() :
     
     // Initialize sending flag
     isSendingMessage = false;
+    
+    // Initialize SLEEPY state cycling
+    inSleepyState = false;
+    sleepyStartTime = 0;
+    lastSleepyCycleTime = 0;
+    currentSleepyFace = false; // Start with SLEEPY1
     
     // NEW: Initialize enhanced SENDER state detection
     lastTxGoodCount = 0;
@@ -378,8 +384,8 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
                 lastFavoriteCountTime = now;
                 lastNodeCount = currentNodeCount;
                 
-                // Use the same node count calculation as the app (NodeStatus)
-                // This ensures consistency with what the app displays
+                // Firmware Uses: nodeDB->getNumMeshNodes() 
+                //This returns the total number of node entries in the database
                 uint32_t actualNodeCount = nodeDB->getNumMeshNodes();
                 
                 snprintf(cachedStatusLine, sizeof(cachedStatusLine), "Nodes:%d Friends:%d", 
@@ -564,19 +570,18 @@ PetState LoRabotModule::calculateNewState() {
     
 
     
-    // Check for SENDER state with 3-second duration (high priority)
+    // Check for SENDER state
     if (inSenderState) {
+        //sender state is triggered when a message is sent, and stays for 2 seconds
         uint32_t senderDuration = (now - senderStartTime) / 1000; // seconds
-        if (senderDuration < 3) {
-            // Remove debug logging to reduce interference
-            // LOG_DEBUG("LoRabot staying in SENDER state - duration: %d seconds", senderDuration);
+        if (senderDuration < 2) {
             return SENDER;
         } else {
-            // Exit SENDER state after 3 seconds
+            // Exit SENDER state after 2 seconds
             inSenderState = false;
             isSendingMessage = false; // Clear sending flag when SENDER state expires
             pendingSenderTrigger = false; // Clear pending trigger when SENDER state expires
-            //LOG_DEBUG("LoRabot exiting SENDER state after 3 seconds");
+      
         }
     }
     
@@ -599,8 +604,15 @@ PetState LoRabotModule::calculateNewState() {
     }
     
     // Check for specific priority states first
-    if (isNightTime() || isLowBattery()) {
-        return SLEEPY;
+    if (isNightTime()) {
+        // Enter sleepy state with cycling between SLEEPY1 and SLEEPY2
+        return handleSleepyStateCycling();
+    } else {
+        // Reset sleepy state when we're no longer in sleepy conditions
+        if (inSleepyState) {
+            inSleepyState = false;
+            LOG_DEBUG("LoRabot: Exiting sleepy state");
+        }
     }
     
     // Check for recent node discovery (highest priority) - show HAPPY when new node found
@@ -648,14 +660,9 @@ PetState LoRabotModule::calculateNewState() {
 
 // Get update interval based on current state and activity
 uint32_t LoRabotModule::getUpdateInterval() {
-    uint32_t baseInterval = 60; // 4000ms baseline for much better performance
+    uint32_t baseInterval = 60; // 60ms baseline timing
+    return baseInterval;
     
- 
-        return baseInterval;
-    
-    
-    // TODO: Add battery-based adjustments when battery API is available
-    // if (batteryLevel < 20) return interval * 2;  // Slower when low battery
 }
 
 // Get current face string
@@ -802,22 +809,11 @@ TextMessageAnalysis LoRabotModule::analyzeTextMessageDirection(const meshtastic_
     
     // Switch-based analysis for clean, readable logic
     switch (analysis.direction) {
-        case MY_TEXT_TO_SOMEONE:
-            // I'm being social! Pet gets happy
-            analysis.suggestedState = SENDER;
-            LOG_INFO("LoRabot: I sent text to 0x%08x - triggering SENDER state", mp.to);
-            break;
-            
+           
         case TEXT_TO_ME_DIRECT:
             // Someone texted me directly! Pet gets excited
             analysis.suggestedState = EXCITED;
             LOG_INFO("LoRabot: Got direct text from 0x%08x - triggering EXCITED state", mp.from);
-            break;
-            
-        case TEXT_BROADCAST_BY_ME:
-            // I broadcast something
-            analysis.suggestedState = SENDER;
-            LOG_INFO("LoRabot: I broadcast text - triggering SENDER state");
             break;
             
         case TEXT_BROADCAST_BY_OTHER:
@@ -931,7 +927,7 @@ int32_t LoRabotModule::executeSenderDetection() {
     return 0; // Continue immediately to next step
 }
 
-// NEW: Execute display update step (Step 4) - placeholder for now
+// NEW: Execute display update step (Step 4)
 int32_t LoRabotModule::executeDisplayUpdate() {
     uint32_t startTime = millis();
     
@@ -1170,4 +1166,43 @@ NodeDiscoveryAnalysis LoRabotModule::analyzeNodeDiscoveryDirection(size_t totalN
     }
     
     return analysis;
+}
+
+// Handle SLEEPY state cycling between SLEEPY1 and SLEEPY2 every second
+PetState LoRabotModule::handleSleepyStateCycling() {
+    uint32_t now = millis();
+    
+    // If we just entered sleepy state, initialize
+    if (!inSleepyState) {
+        inSleepyState = true;
+        sleepyStartTime = now;
+        lastSleepyCycleTime = now;
+        currentSleepyFace = false; // Start with SLEEPY1
+        
+        // IMMEDIATELY update the state and trigger UI update
+        currentState = SLEEPY1;
+        displayNeedsUpdate = true;
+        LOG_DEBUG("LoRabot: Entering sleepy state - starting with SLEEPY1");
+        return SLEEPY1;
+    }
+    
+    // Check if it's time to cycle (every 1000ms for visible animation)
+    if ((now - lastSleepyCycleTime) >= 1000) {
+        currentSleepyFace = !currentSleepyFace; // Toggle between faces
+        lastSleepyCycleTime = now;
+        
+        // DIRECTLY update currentState and trigger UI redraw
+        if (currentSleepyFace) {
+            currentState = SLEEPY2;
+            displayNeedsUpdate = true;
+            LOG_DEBUG("LoRabot: Cycling to SLEEPY2");
+        } else {
+            currentState = SLEEPY1;
+            displayNeedsUpdate = true;
+            LOG_DEBUG("LoRabot: Cycling to SLEEPY1");
+        }
+    }
+    
+    // Return current face (this should match currentState now)
+    return currentState;
 }
