@@ -134,11 +134,14 @@ LoRabotModule::LoRabotModule() :
     lookingCycle = 0; // 0=left, 1=right, 2=awake
     lastFaceAnimationTime = 0; // Track face animation separately from thread timing
     
+    // NEW: Initialize step-based execution state
+    initializeStepState();
+    
     // Load saved state from preferences
     loadState();
     
     // Start the thread
-    setIntervalFromNow(10000); // Initial 10 second interval for better performance
+    setIntervalFromNow(1000); // Initial 10 second interval for better performance
     
     // Debug output
     //LOG_INFO("LoRabot Module initialized - wants UI frame: %s", wantUIFrame() ? "YES" : "NO");
@@ -149,110 +152,45 @@ LoRabotModule::~LoRabotModule() {
     saveState();
 }
 
-// Main thread execution
+// NEW: Step-based main thread execution for cooperative threading
 int32_t LoRabotModule::runOnce() {
-    // Update pet state based on network activity and time
-    updatePetState();
+    uint32_t now = millis();
     
-        // NEW: Clean switch-based node discovery detection
-        static uint8_t nodeCheckCounter = 0;
-        nodeCheckCounter++;
-        if (nodeCheckCounter >= 4) { // Only check every 4 cycles (much less frequent)
-            nodeCheckCounter = 0;
-            size_t totalNodeCount = nodeDB->getNumMeshNodes();
-            
-            // Use the clean analysis system for node discovery
-            NodeDiscoveryAnalysis analysis = analyzeNodeDiscoveryDirection(totalNodeCount, currentNodeCount);
-            
-            if (analysis.shouldUpdateCount) {
-                // Update current node count
-                currentNodeCount = totalNodeCount;
-                processNetworkEvent();
-                
-                // Clear cached status line when node count changes so it gets recalculated
-                static char cachedStatusLine[32] = "";
-                cachedStatusLine[0] = '\0'; // Clear the cache
-            }
-            
-            if (analysis.shouldTriggerHappy) {
-                // New node discovered - trigger HAPPY state
-                lastDiscoveredNode = totalNodeCount;
-                nodeDiscoveryTime = millis();
-                showingNewNode = true;
-                
-                // Copy the analyzed node name
-                strncpy(lastNodeName, analysis.nodeName, sizeof(lastNodeName) - 1);
-                lastNodeName[sizeof(lastNodeName) - 1] = '\0'; // Ensure null termination
-                
-                // Immediately trigger HAPPY state for new node discovery
-                previousState = currentState;
-                currentState = HAPPY;
-                lastStateChange = millis();
-                displayNeedsUpdate = true;
-                
-                LOG_DEBUG("LoRabot discovered new node: %s! Total nodes: %d", lastNodeName, totalNodeCount);
-            }
-        }
-        
-        // Clear the "showing new node" flag after timeout
-        if (showingNewNode && (millis() - nodeDiscoveryTime) > 10000) {
-            showingNewNode = false;
-            LOG_DEBUG("LoRabot clearing new node flag - returning to normal states");
-        }
-        
-        // Clear sending flag if it gets stuck (safety timeout)
-        if (isSendingMessage && (millis() - senderStartTime) > 5000) {
-            isSendingMessage = false;
-            LOG_DEBUG("LoRabot clearing stuck sending flag");
-        }
+    // Check if we should yield based on time spent in current step
+    if ((now - stepState.lastYieldTime) > MAX_STEP_TIME_MS) {
+        stepState.lastYieldTime = now;
+        return getUpdateInterval(); // Yield control back to scheduler
+    }
     
-
-        
-        // ENHANCED SENDER state detection - correlates txGood increases with text message detection
-        // This is crucial for detecting DIRECT MESSAGES that don't pass through handleReceived() on the sending node
-        static uint32_t lastSenderCheck = 0;
-        uint32_t now = millis();
-        if (now - lastSenderCheck > 750) { // Check every 750ms for much faster response
-            lastSenderCheck = now;
+    // Execute current step
+    switch (stepState.currentStep) {
+        case STEP_PET_STATE_UPDATE:
+            return executePetStateUpdate();
             
-            if (RadioLibInterface::instance && !inSenderState && !isSendingMessage) {
-                uint32_t currentTxGood = RadioLibInterface::instance->txGood;
-                
-                // STEP 1: Check if txGood increased (we sent something)
-                if (currentTxGood > lastTxGoodCount) {
-                    uint32_t txIncrease = currentTxGood - lastTxGoodCount;
-                    
-                    // STEP 2: Try to correlate with text message detection from handleReceived()
-                    if (pendingSenderTrigger && (now - lastTextMessageTxTime) < 500) { // Reduced window for better correlation
-                        // We detected a text message pattern AND txGood increased - this is likely a text message
-                        LOG_INFO("LoRabot detected text message transmission via correlation - triggering SENDER state");
-                        isSendingMessage = true; // Set flag immediately to prevent HAPPY state interference
-                        triggerSenderState();
-                        pendingSenderTrigger = false; // Clear the flag
-                    }
-                    // STEP 3: Handle direct messages that don't pass through handleReceived()
-                    else if (!pendingSenderTrigger && txIncrease == 1) {
-                        // Single packet transmission without pending trigger - likely a direct message
-                        // Direct messages don't pass through handleReceived() on the sending node, so we need to be aggressive
-                        LOG_INFO("LoRabot detected single packet transmission - likely direct message, triggering SENDER state");
-                        isSendingMessage = true; // Set flag immediately to prevent HAPPY state interference
-                        triggerSenderState();
-                    }
-                    // STEP 4: Handle multiple packet transmissions (might be system packets)
-                    else {
-                        LOG_DEBUG("LoRabot detected transmission but not a text message (txGood: %d -> %d, increase: %d)", 
-                                  lastTxGoodCount, currentTxGood, txIncrease);
-                    }
-                    lastTxGoodCount = currentTxGood;
-                }
-            }
-        }
-        
-    // TODO: Replace with correct battery API when found
-    // batteryLevel = getBatteryLevel();  // Need to research correct function
-    
-    // Return next update interval (adaptive timing)
-    return getUpdateInterval();
+        case STEP_NODE_DISCOVERY_CHECK:
+            return executeNodeDiscoveryCheck();
+            
+        case STEP_SENDER_DETECTION:
+            return executeSenderDetection();
+            
+        case STEP_DISPLAY_UPDATE:
+            return executeDisplayUpdate();
+            
+        case STEP_MESSAGE_PROCESSING:
+            return executeMessageProcessing();
+            
+        case STEP_CLEANUP:
+            return executeCleanup();
+            
+        case STEP_YIELD:
+            stepState.currentStep = STEP_PET_STATE_UPDATE; // Reset cycle
+            stepState.lastYieldTime = now;
+            return getUpdateInterval();
+            
+        default:
+            stepState.currentStep = STEP_PET_STATE_UPDATE; // Reset to first step
+            return getUpdateInterval();
+    }
 }
 
 // Handle received mesh packets
@@ -710,26 +648,11 @@ PetState LoRabotModule::calculateNewState() {
 
 // Get update interval based on current state and activity
 uint32_t LoRabotModule::getUpdateInterval() {
-    uint32_t baseInterval = 4000; // 4000ms baseline for much better performance
+    uint32_t baseInterval = 60; // 4000ms baseline for much better performance
     
-    switch (currentState) {
-        case INTENSE:
-            return 4000; // Increased from 2000ms to 4000ms for INTENSE state
-        case SENDER:
-            return 4000; // 4000ms for SENDER state
-        case EXCITED:
-        case GRATEFUL:
-            return 8000; // Increased from 4000ms to 8000ms for excited/grateful cycle
-        case SLEEPY:
-            return 8000; // Increased from 5000ms to 8000ms when sleepy
-        case BORED:
-        case DEMOTIVATED:
-            return 10000; // Increased from 8000ms to 10000ms when inactive
-        case HAPPY:
-            return 5000; // Increased from 3000ms to 5000ms for positive states
-        default:
-            return baseInterval;
-    }
+ 
+        return baseInterval;
+    
     
     // TODO: Add battery-based adjustments when battery API is available
     // if (batteryLevel < 20) return interval * 2;  // Slower when low battery
@@ -911,6 +834,234 @@ TextMessageAnalysis LoRabotModule::analyzeTextMessageDirection(const meshtastic_
     }
     
     return analysis;
+}
+
+// NEW: Initialize step-based execution state
+void LoRabotModule::initializeStepState() {
+    stepState.currentStep = STEP_PET_STATE_UPDATE;
+    stepState.stepStartTime = millis();
+    stepState.lastYieldTime = millis();
+    stepState.stepComplete = false;
+    
+    // Initialize step-specific state variables
+    stepState.nodeDiscoveryIndex = 0;
+    stepState.nodeCheckCounter = 0;
+    stepState.lastTxGoodCheck = 0;
+    stepState.displayUpdateCounter = 0;
+    stepState.nodeDiscoveryInProgress = false;
+    stepState.totalNodeCount = 0;
+    stepState.previousNodeCount = 0;
+    
+    LOG_DEBUG("LoRabot: Step-based execution initialized");
+}
+
+// NEW: Execute pet state update step (Step 1)
+int32_t LoRabotModule::executePetStateUpdate() {
+    uint32_t startTime = millis();
+    
+    // Update pet state based on network activity and time
+    updatePetState();
+    
+    // Check if we've spent too much time
+    if ((millis() - startTime) > MAX_STEP_TIME_MS) {
+        LOG_DEBUG("LoRabot: Pet state update took too long, yielding");
+        return getUpdateInterval(); // Yield control
+    }
+    
+    // Move to next step
+    stepState.currentStep = STEP_NODE_DISCOVERY_CHECK;
+    stepState.stepStartTime = millis();
+    
+    return 0; // Continue immediately to next step
+}
+
+// NEW: Execute sender detection step (Step 3) - placeholder for now
+int32_t LoRabotModule::executeSenderDetection() {
+    uint32_t startTime = millis();
+    
+    // ENHANCED SENDER state detection - correlates txGood increases with text message detection
+    // This is crucial for detecting DIRECT MESSAGES that don't pass through handleReceived() on the sending node
+    uint32_t now = millis();
+    if (now - stepState.lastTxGoodCheck > 750) { // Check every 750ms for much faster response
+        stepState.lastTxGoodCheck = now;
+        
+        if (RadioLibInterface::instance && !inSenderState && !isSendingMessage) {
+            uint32_t currentTxGood = RadioLibInterface::instance->txGood;
+            
+            // STEP 1: Check if txGood increased (we sent something)
+            if (currentTxGood > lastTxGoodCount) {
+                uint32_t txIncrease = currentTxGood - lastTxGoodCount;
+                
+                // STEP 2: Try to correlate with text message detection from handleReceived()
+                if (pendingSenderTrigger && (now - lastTextMessageTxTime) < 500) { // Reduced window for better correlation
+                    // We detected a text message pattern AND txGood increased - this is likely a text message
+                    LOG_INFO("LoRabot detected text message transmission via correlation - triggering SENDER state");
+                    isSendingMessage = true; // Set flag immediately to prevent HAPPY state interference
+                    triggerSenderState();
+                    pendingSenderTrigger = false; // Clear the flag
+                }
+                // STEP 3: Handle direct messages that don't pass through handleReceived()
+                else if (!pendingSenderTrigger && txIncrease == 1) {
+                    // Single packet transmission without pending trigger - likely a direct message
+                    // Direct messages don't pass through handleReceived() on the sending node, so we need to be aggressive
+                    LOG_INFO("LoRabot detected single packet transmission - likely direct message, triggering SENDER state");
+                    isSendingMessage = true; // Set flag immediately to prevent HAPPY state interference
+                    triggerSenderState();
+                }
+                // STEP 4: Handle multiple packet transmissions (might be system packets)
+                else {
+                    LOG_DEBUG("LoRabot detected transmission but not a text message (txGood: %d -> %d, increase: %d)", 
+                              lastTxGoodCount, currentTxGood, txIncrease);
+                }
+                lastTxGoodCount = currentTxGood;
+            }
+        }
+    }
+    
+    // Check if we've spent too much time
+    if ((millis() - startTime) > MAX_STEP_TIME_MS) {
+        LOG_DEBUG("LoRabot: Sender detection took too long, yielding");
+        return getUpdateInterval(); // Yield control
+    }
+    
+    // Move to next step
+    stepState.currentStep = STEP_DISPLAY_UPDATE;
+    stepState.stepStartTime = millis();
+    
+    return 0; // Continue immediately to next step
+}
+
+// NEW: Execute display update step (Step 4) - placeholder for now
+int32_t LoRabotModule::executeDisplayUpdate() {
+    uint32_t startTime = millis();
+    
+    // Clear the "showing new node" flag after timeout
+    if (showingNewNode && (millis() - nodeDiscoveryTime) > 10000) {
+        showingNewNode = false;
+        LOG_DEBUG("LoRabot clearing new node flag - returning to normal states");
+    }
+    
+    // Clear sending flag if it gets stuck (safety timeout)
+    if (isSendingMessage && (millis() - senderStartTime) > 5000) {
+        isSendingMessage = false;
+        LOG_DEBUG("LoRabot clearing stuck sending flag");
+    }
+    
+    // Check if we've spent too much time
+    if ((millis() - startTime) > MAX_STEP_TIME_MS) {
+        LOG_DEBUG("LoRabot: Display update took too long, yielding");
+        return getUpdateInterval(); // Yield control
+    }
+    
+    // Move to next step
+    stepState.currentStep = STEP_MESSAGE_PROCESSING;
+    stepState.stepStartTime = millis();
+    
+    return 0; // Continue immediately to next step
+}
+
+// NEW: Execute message processing step (Step 5) - placeholder for now
+int32_t LoRabotModule::executeMessageProcessing() {
+    uint32_t startTime = millis();
+    
+    // TODO: Implement message processing logic here
+    // For now, just move to next step
+    
+    // Check if we've spent too much time
+    if ((millis() - startTime) > MAX_STEP_TIME_MS) {
+        LOG_DEBUG("LoRabot: Message processing took too long, yielding");
+        return getUpdateInterval(); // Yield control
+    }
+    
+    // Move to next step
+    stepState.currentStep = STEP_CLEANUP;
+    stepState.stepStartTime = millis();
+    
+    return 0; // Continue immediately to next step
+}
+
+// NEW: Execute cleanup step (Step 6)
+int32_t LoRabotModule::executeCleanup() {
+    uint32_t startTime = millis();
+    
+    // TODO: Implement cleanup logic here
+    // For now, just move to yield step
+    
+    // Check if we've spent too much time
+    if ((millis() - startTime) > MAX_STEP_TIME_MS) {
+        LOG_DEBUG("LoRabot: Cleanup took too long, yielding");
+        return getUpdateInterval(); // Yield control
+    }
+    
+    // Move to yield step
+    stepState.currentStep = STEP_YIELD;
+    stepState.stepStartTime = millis();
+    
+    return 0; // Continue immediately to yield step
+}
+
+// NEW: Execute node discovery check step (Step 2) with state persistence
+int32_t LoRabotModule::executeNodeDiscoveryCheck() {
+    uint32_t startTime = millis();
+    
+    // Only check every 4 cycles (much less frequent)
+    stepState.nodeCheckCounter++;
+    if (stepState.nodeCheckCounter < 4) {
+        // Skip node discovery this cycle, move to next step
+        stepState.currentStep = STEP_SENDER_DETECTION;
+        stepState.stepStartTime = millis();
+        return 0; // Continue immediately
+    }
+    
+    // Reset counter for next cycle
+    stepState.nodeCheckCounter = 0;
+    
+    // Get current node count
+    size_t totalNodeCount = nodeDB->getNumMeshNodes();
+    
+    // Use the clean analysis system for node discovery
+    NodeDiscoveryAnalysis analysis = analyzeNodeDiscoveryDirection(totalNodeCount, currentNodeCount);
+    
+    if (analysis.shouldUpdateCount) {
+        // Update current node count
+        currentNodeCount = totalNodeCount;
+        processNetworkEvent();
+        
+        // Clear cached status line when node count changes so it gets recalculated
+        static char cachedStatusLine[32] = "";
+        cachedStatusLine[0] = '\0'; // Clear the cache
+    }
+    
+    if (analysis.shouldTriggerHappy) {
+        // New node discovered - trigger HAPPY state
+        lastDiscoveredNode = totalNodeCount;
+        nodeDiscoveryTime = millis();
+        showingNewNode = true;
+        
+        // Copy the analyzed node name
+        strncpy(lastNodeName, analysis.nodeName, sizeof(lastNodeName) - 1);
+        lastNodeName[sizeof(lastNodeName) - 1] = '\0'; // Ensure null termination
+        
+        // Immediately trigger HAPPY state for new node discovery
+        previousState = currentState;
+        currentState = HAPPY;
+        lastStateChange = millis();
+        displayNeedsUpdate = true;
+        
+        LOG_DEBUG("LoRabot discovered new node: %s! Total nodes: %d", lastNodeName, totalNodeCount);
+    }
+    
+    // Check if we've spent too much time
+    if ((millis() - startTime) > MAX_STEP_TIME_MS) {
+        LOG_DEBUG("LoRabot: Node discovery check took too long, yielding");
+        return getUpdateInterval(); // Yield control
+    }
+    
+    // Move to next step
+    stepState.currentStep = STEP_SENDER_DETECTION;
+    stepState.stepStartTime = millis();
+    
+    return 0; // Continue immediately to next step
 }
 
 // NEW: Analyze node discovery type for social behavior

@@ -45,6 +45,17 @@ enum NodeDiscoveryType : uint8_t {
     SENDING_INTERFERENCE         // Currently sending, don't trigger HAPPY
 };
 
+// Step-based execution for cooperative threading
+enum LoRabotStep : uint8_t {
+    STEP_PET_STATE_UPDATE = 0,
+    STEP_NODE_DISCOVERY_CHECK,
+    STEP_SENDER_DETECTION,
+    STEP_DISPLAY_UPDATE,
+    STEP_MESSAGE_PROCESSING,
+    STEP_CLEANUP,
+    STEP_YIELD  // Yield control back to scheduler
+};
+
 // Message type classification for social significance
 enum MessageType : uint8_t {
     SOCIAL_MESSAGE = 0,          // Text messages, direct communication
@@ -73,6 +84,23 @@ struct NodeDiscoveryAnalysis {
     char nodeName[32];
     bool shouldTriggerHappy;
     bool shouldUpdateCount;
+};
+
+// Step-based execution state for cooperative threading
+struct LoRabotStepState {
+    LoRabotStep currentStep;
+    uint32_t stepStartTime;
+    uint32_t lastYieldTime;
+    bool stepComplete;
+    
+    // Step-specific state variables for persistence
+    size_t nodeDiscoveryIndex;        // Current node being processed
+    uint8_t nodeCheckCounter;         // Counter for node discovery frequency
+    uint32_t lastTxGoodCheck;         // Last time we checked txGood
+    uint8_t displayUpdateCounter;     // Counter for display updates
+    bool nodeDiscoveryInProgress;     // Whether we're in the middle of node discovery
+    size_t totalNodeCount;            // Cached total node count
+    size_t previousNodeCount;         // Cached previous node count
 };
 
 // Personality configuration
@@ -161,6 +189,10 @@ private:
     // Display optimization
     char lastDisplayedFace[16];
     bool displayNeedsUpdate;
+    
+    // NEW: Step-based execution state for cooperative threading
+    LoRabotStepState stepState;
+    static const uint32_t MAX_STEP_TIME_MS = 60; // Maximum time per step before yielding
 
 public:
     /** Constructor */
@@ -218,6 +250,15 @@ private:
     // NEW: Node discovery detection functions
     NodeDiscoveryType analyzeNodeDiscovery(size_t totalNodeCount, size_t previousNodeCount);
     NodeDiscoveryAnalysis analyzeNodeDiscoveryDirection(size_t totalNodeCount, size_t previousNodeCount);
+    
+    // NEW: Step-based execution functions for cooperative threading
+    int32_t executePetStateUpdate();
+    int32_t executeNodeDiscoveryCheck();
+    int32_t executeSenderDetection();
+    int32_t executeDisplayUpdate();
+    int32_t executeMessageProcessing();
+    int32_t executeCleanup();
+    void initializeStepState();
     
     // Static arrays for faces and messages
     static const char* const FACES[11];
