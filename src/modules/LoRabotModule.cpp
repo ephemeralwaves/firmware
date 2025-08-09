@@ -48,13 +48,13 @@ const char* const LoRabotModule::STATE_NAMES[11] PROGMEM = {
 // Messages for AWAKE/LOOKING states
 const char* const LoRabotModule::FUNNY_MESSAGES[8] PROGMEM = {
     "Too cute to route.",
-    "Mesh me, maybe?",
+    "Ping me, maybe?",
     "I sense...potential pals",
     "Any1 broadcasting snacks?",
     "LoRa? More like explore-a!",
     "Who's out there?",
     "Looking for friends...",
-    "Mesh network detective!"
+    "Let's link up!"
 };
 
 
@@ -62,8 +62,8 @@ const char* const LoRabotModule::FUNNY_MESSAGES[8] PROGMEM = {
 // Sender messages for SENDER state
 const char* const LoRabotModule::SENDER_MESSAGES[5] PROGMEM = {
     "Message Sent!",
-    "Off it goes!",
-    "Beamed it!",
+    "Beep boop, data sent!",
+    "Beamed the data!",
     "Packet away!",
     "Data transmitted"
 };
@@ -240,12 +240,7 @@ ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
         
         if (analysis.shouldReact) {
             switch (analysis.direction) {
-                case MY_TEXT_TO_SOMEONE:
-                case TEXT_BROADCAST_BY_ME:
-                    // I'm being social! Trigger SENDER state
-                    isSendingMessage = true;
-                    triggerSenderState();
-                    break;
+         
                     
                 case TEXT_TO_ME_DIRECT:
                 case TEXT_BROADCAST_BY_OTHER:
@@ -288,8 +283,8 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
     
     // Draw the pet face on the Left side (moved from center)
     display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->setFont(ArialMT_Plain_16);
-    display->drawString(x + 34, y + 15, currentFace);
+    display->setFont(ArialMT_Plain_24);
+    display->drawString(x + 38, y + 10, currentFace);
     
     // Draw status info or node discovery message - simplified for performance
     static uint32_t lastDrawTime = 0;
@@ -379,11 +374,11 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
     }
     
     // Draw message popup on the Right side when excited
-    if (showingMessagePopup && (millis() - messagePopupTime) < 5000) { // Show for 5 seconds
+    if (showingMessagePopup && (millis() - messagePopupTime) < 6000) { // Show for 6 seconds
         display->setTextAlignment(TEXT_ALIGN_LEFT);
         display->setFont(ArialMT_Plain_10);
-        display->drawString(x + 75, y + 15, "Message:");
-        display->drawString(x + 75, y + 25, receivedMessageText);
+        display->drawString(x + 80, y + 15, "Message:");
+        display->drawString(x + 80, y + 25, receivedMessageText);
     } else if (showingMessagePopup) {
         // Clear the popup after 5 seconds
         showingMessagePopup = false;
@@ -508,13 +503,13 @@ PetState LoRabotModule::calculateNewState() {
     uint32_t now = millis();
     //uint32_t timeSinceActivity = (now - lastActivityTime) / 1000; // seconds
     
-    // Check for BLINK state with 150ms duration 
+    // Check for BLINK state with fast duration for realistic eye blink
     if (inBlinkState) {
         uint32_t blinkDuration = now - blinkStartTime;
-        if (blinkDuration < 125) { // 125ms blink duration
+        if (blinkDuration < 80) { // 80ms blink duration - fast and realistic
             return BLINK;
         } else {
-            // Exit BLINK state after 150ms and set next random blink time
+            // Exit BLINK state after 80ms and set next random blink time
             inBlinkState = false;
             nextBlinkTime = now + random(2000, 5000); // Next blink in 2-5 seconds
         }
@@ -782,7 +777,6 @@ TextMessageAnalysis LoRabotModule::analyzeTextMessageDirection(const meshtastic_
         case TEXT_RELAYED:
             // Just background chatter
             analysis.shouldReact = false;
-
             break;
     }
     
@@ -1069,12 +1063,22 @@ NodeDiscoveryAnalysis LoRabotModule::analyzeNodeDiscoveryDirection(size_t totalN
             
             // Generate node name based on available information
             if (analysis.newestNode) {
+                const int MAX_DISPLAY_LENGTH = 24; // Same as "LoRa? More like explore-a!"
+                const int HELLO_OVERHEAD = 7;      // "Hello " + "!" = 7 characters
+                const int MAX_NAME_LENGTH = MAX_DISPLAY_LENGTH - HELLO_OVERHEAD; // 17 characters max
+                
                 if (analysis.newestNode->has_user && strlen(analysis.newestNode->user.long_name) > 0) {
-                    // Use the actual node name with "Hello Node" prefix
-                    snprintf(analysis.nodeName, sizeof(analysis.nodeName), "Hello %s!", analysis.newestNode->user.long_name);
+                    // Use the actual node name with "Hello" prefix, truncated if needed
+                    char truncatedName[MAX_NAME_LENGTH + 1]; // +1 for null terminator
+                    strncpy(truncatedName, analysis.newestNode->user.long_name, MAX_NAME_LENGTH);
+                    truncatedName[MAX_NAME_LENGTH] = '\0'; // Ensure null termination
+                    snprintf(analysis.nodeName, sizeof(analysis.nodeName), "Hello %s!", truncatedName);
                 } else if (analysis.newestNode->has_user && strlen(analysis.newestNode->user.short_name) > 0) {
-                    // Fallback to short name if long name is not available
-                    snprintf(analysis.nodeName, sizeof(analysis.nodeName), "Hello %s!", analysis.newestNode->user.short_name);
+                    // Fallback to short name if long name is not available, truncated if needed
+                    char truncatedName[MAX_NAME_LENGTH + 1]; // +1 for null terminator
+                    strncpy(truncatedName, analysis.newestNode->user.short_name, MAX_NAME_LENGTH);
+                    truncatedName[MAX_NAME_LENGTH] = '\0'; // Ensure null termination
+                    snprintf(analysis.nodeName, sizeof(analysis.nodeName), "Hello %s!", truncatedName);
                 } else {
                     // Fallback to generic name (node number) - format as hex for better readability
                     snprintf(analysis.nodeName, sizeof(analysis.nodeName), "Hello Node 0x%x!", analysis.newestNode->num);
