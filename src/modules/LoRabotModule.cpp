@@ -130,6 +130,7 @@ LoRabotModule::LoRabotModule() :
     
     // NEW: Initialize enhanced SENDER state detection
     lastTxGoodCount = 0;
+    lastTxRelayCount = 0;
     lastTextMessageTxTime = 0;
     pendingSenderTrigger = false;
     senderDetectionWindow = 2000; // 2 second window for correlation
@@ -506,7 +507,7 @@ PetState LoRabotModule::calculateNewState() {
     // Check for BLINK state with fast duration for realistic eye blink
     if (inBlinkState) {
         uint32_t blinkDuration = now - blinkStartTime;
-        if (blinkDuration < 80) { // 80ms blink duration - fast and realistic
+        if (blinkDuration < 20) { // 20ms blink duration - fast and realistic
             return BLINK;
         } else {
             // Exit BLINK state after 80ms and set next random blink time
@@ -759,9 +760,20 @@ TextMessageAnalysis LoRabotModule::analyzeTextMessageDirection(const meshtastic_
     analysis.shouldReact = true;
     analysis.suggestedState = AWAKE; // Default state
     
-    // Switch-based analysis for clean, readable logic
+        // Switch-based analysis for clean, readable logic
     switch (analysis.direction) {
-           
+        case MY_TEXT_TO_SOMEONE:
+            // I sent a text message to someone! Pet gets SENDER state
+            analysis.suggestedState = SENDER;
+            LOG_INFO("LoRabot: I sent direct text to 0x%08x - triggering SENDER state", mp.to);
+            break;
+            
+        case TEXT_BROADCAST_BY_ME:
+            // I broadcast a message! Pet gets SENDER state
+            analysis.suggestedState = SENDER;
+            LOG_INFO("LoRabot: I broadcast text - triggering SENDER state");
+            break;
+            
         case TEXT_TO_ME_DIRECT:
             // Someone texted me directly! Pet gets excited
             analysis.suggestedState = EXCITED;
@@ -849,11 +861,28 @@ int32_t LoRabotModule::executeSenderDetection() {
                 }
                 // STEP 3: Handle direct messages that don't pass through handleReceived()
                 else if (!pendingSenderTrigger && txIncrease == 1) {
-                    // Single packet transmission without pending trigger - likely a direct message
-                    // Direct messages don't pass through handleReceived() on the sending node, so we need to be aggressive
-                    LOG_INFO("LoRabot detected single packet transmission - likely direct message, triggering SENDER state");
-                    isSendingMessage = true; // Set flag immediately to prevent HAPPY state interference
-                    triggerSenderState();
+                    // Check if this was a relay transmission (should not trigger SENDER)
+                    uint32_t currentTxRelay = RadioLibInterface::instance->txRelay;
+                    uint32_t txRelayIncrease = currentTxRelay - lastTxRelayCount;
+                    
+                    if (txRelayIncrease == 0) {
+                        // Check if we're currently in EXCITED or HAPPY state (likely from received message)
+                        if (inExcitedState || currentState == HAPPY) {
+                            // Don't trigger SENDER when we're already excited from receiving a message
+                            // This prevents false positives from automatic responses to received messages
+                            LOG_DEBUG("LoRabot detected transmission while in EXCITED/HAPPY state - likely automatic response, not triggering SENDER");
+                        } else {
+                            // Single packet transmission without relay and not in excited state - likely a direct message
+                            LOG_INFO("LoRabot detected single packet transmission (non-relay) - likely direct message, triggering SENDER state");
+                            isSendingMessage = true; // Set flag immediately to prevent HAPPY state interference
+                            triggerSenderState();
+                        }
+                    } else {
+                        // This was a relay transmission, don't trigger SENDER
+                        LOG_DEBUG("LoRabot detected relay transmission (txGood: +%d, txRelay: +%d) - not triggering SENDER", txIncrease, txRelayIncrease);
+                    }
+                    
+                    lastTxRelayCount = currentTxRelay;
                 }
 
                 lastTxGoodCount = currentTxGood;

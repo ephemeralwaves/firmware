@@ -182,6 +182,7 @@ private:
     
     // NEW: Enhanced SENDER state detection
     uint32_t lastTxGoodCount;      // Last known txGood count
+    uint32_t lastTxRelayCount;     // Last known txRelay count (to filter out relay transmissions)
     uint32_t lastTextMessageTxTime; // When we last detected a text message transmission
     bool pendingSenderTrigger;     // Flag to trigger SENDER state on next txGood increase
     uint32_t senderDetectionWindow; // Time window for correlating txGood with text messages
