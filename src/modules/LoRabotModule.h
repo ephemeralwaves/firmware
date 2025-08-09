@@ -158,10 +158,10 @@ private:
     char receivedMessageText[64];  // Store actual received message
     uint8_t funnyMessageIndex;     // Track which funny message to show
     
-    // BLINK state tracking
+    // BLINK state tracking (for compatibility - actual timing in clean animation system)
     bool inBlinkState;             // Currently in BLINK animation
     uint32_t blinkStartTime;       // When BLINK animation started
-    uint32_t nextBlinkTime;        // When next blink should occur (random 2-5 seconds)
+    // nextBlinkTime moved to clean animation system below
     uint32_t lastBlinkCheckTime;   // Last time we checked for blink timing
     
 
@@ -187,12 +187,25 @@ private:
     bool pendingSenderTrigger;     // Flag to trigger SENDER state on next txGood increase
     uint32_t senderDetectionWindow; // Time window for correlating txGood with text messages
     
-    // Looking state tracking
-    bool lookingRight;
-    uint32_t lastLookingChange;
-    uint8_t lookingCycle; // 0=left, 1=right, 2=awake
-    uint32_t lastFaceAnimationTime; // Track face animation separately from thread timing
-    uint32_t lastFunnyMessageTime; // Track funny message rotation separately (every 3 seconds)
+    // Clean Animation System
+    enum AnimationPhase {
+        AWAKE_PHASE,    // AWAKE with periodic blinking
+        LOOKING_PHASE   // Looking left/right cycle
+    };
+    
+    AnimationPhase currentPhase;
+    uint32_t phaseStartTime;        // When current phase started
+    uint32_t nextPhaseTime;         // When to switch to next phase (6-7 seconds)
+    
+    // AWAKE Phase timers
+    uint32_t awakeStartTime;        // When current AWAKE period started
+    uint32_t nextBlinkTime;         // When next blink should occur (1-3 seconds from awake start)
+    
+    // LOOKING Phase timers  
+    uint8_t lookingCycle;           // 0=left, 1=right, 2=awake
+    uint32_t nextLookingTime;       // When to advance looking cycle (~500ms)
+    
+    uint32_t lastFunnyMessageTime;  // Track funny message rotation separately (every 3 seconds)
     
     // Display optimization
     char lastDisplayedFace[16];
@@ -235,7 +248,7 @@ private:
     bool isLowBattery();
     
     // Check if BLINK state should be triggered
-    bool shouldTriggerBlink();
+    // shouldTriggerBlink() removed - blink timing now handled in calculateNewState()
     
 
     
