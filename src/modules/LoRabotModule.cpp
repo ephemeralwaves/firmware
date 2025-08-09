@@ -25,7 +25,7 @@ const char* const LoRabotModule::FACES[11] PROGMEM = {
     "( ~ o ~ )",    // SLEEPY1 - night hours
     "( ~ - ~ )",    // SLEEPY2 - night hours
     "( ^ o ^ )",    // GRATEFUL - thankful for received messages
-    "( O _ O )",    // INTENSE - heavy message traffic- not implemented, WIP
+    "( - . - )",    // BLINK - quick eye blink animation
     "( v _ v )",    // DEMOTIVATED - low battery
     "(  ' . ')>"    // SENDER - messages sent by node, can be any type of data (text, position, telemetry, etc.)
 };
@@ -40,7 +40,7 @@ const char* const LoRabotModule::STATE_NAMES[11] PROGMEM = {
     "Sleepy1",   
     "Sleepy2",    
     "Grateful",
-    "Intense",
+    "Blink",
     "Sad",
     "Sender"
 };
@@ -106,11 +106,11 @@ LoRabotModule::LoRabotModule() :
     memset(receivedMessageText, 0, sizeof(receivedMessageText));
     funnyMessageIndex = 0;
     
-    // Initialize INTENSE state tracking
-    memset(messageTimes, 0, sizeof(messageTimes));
-    messageIndex = 0;
-    inIntenseState = false;
-    intenseStartTime = 0;
+    // Initialize BLINK state tracking
+    inBlinkState = false;
+    blinkStartTime = 0;
+    nextBlinkTime = millis() + random(2000, 4000); // First blink in 2-4 seconds
+    lastBlinkCheckTime = 0;
     
 
     
@@ -150,9 +150,6 @@ LoRabotModule::LoRabotModule() :
     // Start the thread
     setIntervalFromNow(1000); // Initial 10 second interval for better performance
     
-    // Debug output
-    //LOG_INFO("LoRabot Module initialized - wants UI frame: %s", wantUIFrame() ? "YES" : "NO");
-    //LOG_INFO("LoRabot Module getUIFrameObservable: %p", getUIFrameObservable());
 }
 
 LoRabotModule::~LoRabotModule() {
@@ -205,24 +202,9 @@ ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
     // Track network activity
     processNetworkEvent();
     
-    // Debug: log all received packets to see what's happening
-    LOG_DEBUG("LoRabot received packet - from: %d, port: %d, source: %d, our node: %d, isFromUs: %s", 
-              mp.from, mp.decoded.portnum, mp.decoded.source, nodeDB->getNodeNum(), isFromUs(&mp) ? "YES" : "NO");
-    
     // Check if this is a received text message (portnum = 1) or position update (portnum = 3)
     // Only trigger EXCITED for received messages, not sent messages
     if ((mp.decoded.portnum == 1 || mp.decoded.portnum == 3) && mp.from != 0) {
-        // Track message time for INTENSE state detection
-        uint32_t now = millis();
-        messageTimes[messageIndex] = now;
-        messageIndex = (messageIndex + 1) % 5; // Circular buffer
-        
-        // Check if we should trigger INTENSE state
-        if (shouldTriggerIntense() && !inIntenseState) {
-            inIntenseState = true;
-            intenseStartTime = now;
-            // LOG_INFO("LoRabot triggered INTENSE state! More than 3 messages in 5 seconds.");
-        }
         
         // Text message or position update received - trigger excited state
         lastMessageTime = millis();
@@ -272,17 +254,10 @@ ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
                     break;
                     
                 default:
-                    LOG_DEBUG("LoRabot: Text message not triggering state change");
                     break;
             }
         }
-    } else {
-        // Debug: log all received packets to see what's happening
-        LOG_DEBUG("LoRabot received packet - from: %d, port: %d, our node: %d", 
-                  mp.from, mp.decoded.portnum, nodeDB->getNodeNum());
-        // Debug: log all received packets to see what ports are being received
-        //LOG_DEBUG("LoRabot received packet on port %d (not triggering excited)", mp.decoded.portnum);
-    }
+    } 
     
     // Update friend tracking if this is from a user
     if (mp.from != 0) {
@@ -315,10 +290,6 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(ArialMT_Plain_16);
     display->drawString(x + 34, y + 15, currentFace);
-    
-    // Draw state name, for debugging
-    //display->setFont(ArialMT_Plain_10);
-    //display->drawString(x + 34, y + 35, stateName);
     
     // Draw status info or node discovery message - simplified for performance
     static uint32_t lastDrawTime = 0;
@@ -354,8 +325,8 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
             const char* senderMsg = (const char*)pgm_read_ptr(&SENDER_MESSAGES[senderMessageIndex]);
             display->setFont(ArialMT_Plain_10);
             display->drawString(x + 64, y + 50, senderMsg);
-        } else if (currentState == AWAKE || currentState == LOOKING_AROUND_LEFT || currentState == LOOKING_AROUND_RIGHT) {
-            // Show funny messages for awake/looking states
+        } else if (currentState == AWAKE || currentState == LOOKING_AROUND_LEFT || currentState == LOOKING_AROUND_RIGHT || currentState == BLINK) {
+            // Show funny messages for awake/looking/blink states
             const char* funnyMsg = (const char*)pgm_read_ptr(&FUNNY_MESSAGES[funnyMessageIndex]);
             display->setFont(ArialMT_Plain_10);
             display->drawString(x + 64, y + 50, funnyMsg);
@@ -397,7 +368,7 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
             const char* senderMsg = (const char*)pgm_read_ptr(&SENDER_MESSAGES[senderMessageIndex]);
             display->setFont(ArialMT_Plain_10);
             display->drawString(x + 64, y + 50, senderMsg);
-        } else if (currentState == AWAKE || currentState == LOOKING_AROUND_LEFT || currentState == LOOKING_AROUND_RIGHT) {
+        } else if (currentState == AWAKE || currentState == LOOKING_AROUND_LEFT || currentState == LOOKING_AROUND_RIGHT || currentState == BLINK) {
             const char* funnyMsg = (const char*)pgm_read_ptr(&FUNNY_MESSAGES[funnyMessageIndex]);
             display->setFont(ArialMT_Plain_10);
             display->drawString(x + 64, y + 50, funnyMsg);
@@ -447,8 +418,6 @@ void LoRabotModule::updatePetState() {
         
         // Note: Funny message rotation is now handled separately with 3-second timing in calculateNewState()
         
-        // Reduce logging to prevent UI interference
-        //LOG_DEBUG("LoRabot state changed: %d -> %d", previousState, currentState);
         
         // Save state periodically
         if ((now - lastStateChange) > 60000) { // Every minute
@@ -503,9 +472,8 @@ bool LoRabotModule::isNightTime() {
     }
     
     uint8_t hour = timeinfo.tm_hour;
-    //LOG_DEBUG("LoRabot: isNightTime - hour: %d", hour);
-    return (hour >= personality.sleepy_start_hour || hour < personality.sleepy_end_hour);
 
+    return false;
 }
 
 // Check if battery is low
@@ -514,21 +482,16 @@ bool LoRabotModule::isLowBattery() {
     return false;  // For now, assume battery is always OK
 }
 
-// Check if INTENSE state should be triggered
-bool LoRabotModule::shouldTriggerIntense() {
+// Check if BLINK should be triggered
+bool LoRabotModule::shouldTriggerBlink() {
     uint32_t now = millis();
-    uint32_t fiveSecondsAgo = now - 5000; // 5 seconds ago
     
-    // Count messages in the last 5 seconds
-    uint8_t messageCount = 0;
-    for (uint8_t i = 0; i < 5; i++) {
-        if (messageTimes[i] > fiveSecondsAgo) {
-            messageCount++;
-        }
+    // Check if it's time to blink (based on random interval)
+    if (now >= nextBlinkTime && !inBlinkState) {
+        return true;
     }
     
-    // Trigger INTENSE if more than 3 messages in 5 seconds
-    return messageCount > 3;
+    return false;
 }
 
 
@@ -545,17 +508,15 @@ PetState LoRabotModule::calculateNewState() {
     uint32_t now = millis();
     //uint32_t timeSinceActivity = (now - lastActivityTime) / 1000; // seconds
     
-    // Check for INTENSE state with 3-second duration (highest priority)
-    if (inIntenseState) {
-        uint32_t intenseDuration = (now - intenseStartTime) / 1000; // seconds
-        if (intenseDuration < 3) {
-            // Remove debug logging to reduce interference
-            // LOG_DEBUG("LoRabot staying in INTENSE state - duration: %d seconds", intenseDuration);
-            return INTENSE;
+    // Check for BLINK state with 150ms duration 
+    if (inBlinkState) {
+        uint32_t blinkDuration = now - blinkStartTime;
+        if (blinkDuration < 125) { // 125ms blink duration
+            return BLINK;
         } else {
-            // Exit INTENSE state after 3 seconds
-            inIntenseState = false;
-            //LOG_DEBUG("LoRabot exiting INTENSE state after 3 seconds");
+            // Exit BLINK state after 150ms and set next random blink time
+            inBlinkState = false;
+            nextBlinkTime = now + random(2000, 5000); // Next blink in 2-5 seconds
         }
     }
     
@@ -584,13 +545,10 @@ PetState LoRabotModule::calculateNewState() {
             return EXCITED;
         } else if (excitedDuration < 6) {
             // Switch to GRATEFUL for next 3 seconds
-            // Remove debug logging to reduce interference
-            // LOG_DEBUG("LoRabot switching to GRATEFUL state (excited duration: %d seconds)", excitedDuration);
             return GRATEFUL;
         } else {
             // Exit excited/grateful cycle after 6 seconds total
             inExcitedState = false;
-            //LOG_DEBUG("LoRabot exiting excited/grateful cycle after 6 seconds");
         }
     }
     
@@ -603,22 +561,29 @@ PetState LoRabotModule::calculateNewState() {
         inSleepyState = false;
         currentState = AWAKE;
         displayNeedsUpdate = true;
-        //LOG_DEBUG("LoRabot: Forcing exit from sleepy state to AWAKE");
     }
     
     // Check for recent node discovery (highest priority) - show HAPPY when new node found
     if (showingNewNode && (now - nodeDiscoveryTime) < 8000) { // Show for 8 seconds
-        // Remove debug logging to reduce interference
-        // LOG_DEBUG("LoRabot in HAPPY state - showing new node for 8 seconds");
         return HAPPY;
     }
     
     // Default behavior: AWAKE state, then looking states when nodes are present
     if (currentNodeCount > 0) {
-        // 3-state cycle: Looking Left → Looking Right → Awake → repeat
+        // Check if we should trigger a blink from AWAKE state
+        if (currentState == AWAKE && shouldTriggerBlink()) {
+            inBlinkState = true;
+            blinkStartTime = now;
+            currentState = BLINK;
+            displayNeedsUpdate = true;
+            LOG_DEBUG("LoRabot: Triggering BLINK from AWAKE");
+            return BLINK;
+        }
+        
+        // 4-state cycle: Looking Left → Looking Right → Awake → (Blink) → repeat
         // Check if it's time to cycle (every 1 second for visible animation)
         if ((now - lastFaceAnimationTime) >= 1000) {
-            lookingCycle = (lookingCycle + 1) % 3; // Cycle through 0,1,2
+            lookingCycle = (lookingCycle + 1) % 3; // Still cycle through 0,1,2 for faces
             lastFaceAnimationTime = now;
             
             // DIRECTLY update currentState and trigger UI redraw
@@ -637,6 +602,7 @@ PetState LoRabotModule::calculateNewState() {
                     currentState = AWAKE;
                     displayNeedsUpdate = true;
                     LOG_DEBUG("LoRabot: Cycling to AWAKE");
+                    // Don't trigger blink immediately, wait for random interval
                     break;
                 default:
                     currentState = AWAKE;
@@ -645,11 +611,10 @@ PetState LoRabotModule::calculateNewState() {
             }
         }
         
-        // Rotate funny messages every 3 seconds (independent of face animation)
-        if ((now - lastFunnyMessageTime) >= 3000) {
+        // Rotate funny messages every 5 seconds (independent of face animation)
+        if ((now - lastFunnyMessageTime) >= 5000) {
             funnyMessageIndex = (funnyMessageIndex + 1) % 8; // Rotate through 8 funny messages
             lastFunnyMessageTime = now;
-            LOG_DEBUG("LoRabot: Rotating funny message to index %d", funnyMessageIndex);
         }
         
         // Return current state (should match currentState now)
@@ -657,8 +622,7 @@ PetState LoRabotModule::calculateNewState() {
     }
     
     // No nodes present - stay in AWAKE state
-    // Remove debug logging to reduce interference
-    // LOG_DEBUG("LoRabot in AWAKE state (no nodes)");
+
     return AWAKE;
 }
 
@@ -677,8 +641,7 @@ const char* LoRabotModule::getCurrentFace() {
     }
     
     const char* face = (const char*)pgm_read_ptr(&FACES[currentState]);
-    // Remove debug logging to reduce interference
-    // LOG_DEBUG("LoRabot getCurrentFace - state: %d, face: %s", currentState, face);
+
     return face;
 }
 
@@ -729,8 +692,6 @@ bool LoRabotModule::isMyOutgoingTextMessage(const meshtastic_MeshPacket &mp) {
                      (mp.from == myNodeNum) &&                    // From me
                      (mp.to != myNodeNum);                        // Not to myself
     
-    LOG_DEBUG("LoRabot isMyOutgoingTextMessage - port: %d, from: 0x%x, to: 0x%x, myNode: 0x%x, isOutgoing: %s", 
-              mp.decoded.portnum, mp.from, mp.to, myNodeNum, isOutgoing ? "YES" : "NO");
     
     return isOutgoing;
 }
@@ -742,8 +703,6 @@ bool LoRabotModule::isIncomingTextMessage(const meshtastic_MeshPacket &mp) {
     bool isIncoming = (mp.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) &&
                      (mp.from != myNodeNum);                      // Not from me
     
-    LOG_DEBUG("LoRabot isIncomingTextMessage - port: %d, from: 0x%x, myNode: 0x%x, isIncoming: %s", 
-              mp.decoded.portnum, mp.from, myNodeNum, isIncoming ? "YES" : "NO");
     
     return isIncoming;
 }
@@ -761,30 +720,24 @@ TextMessageDirection LoRabotModule::analyzeTextMessage(const meshtastic_MeshPack
     bool isToMe = (mp.to == myNodeNum);
     bool isFirstHop = (mp.hop_start == mp.hop_limit && mp.hop_limit > 0);
     
-    LOG_DEBUG("LoRabot analyzeTextMessage - from: 0x%x, to: 0x%x, myNode: 0x%x, isFromMe: %s, isBroadcast: %s, isToMe: %s, isFirstHop: %s", 
-              mp.from, mp.to, myNodeNum, isFromMe ? "YES" : "NO", isBroadcast ? "YES" : "NO", isToMe ? "YES" : "NO", isFirstHop ? "YES" : "NO");
-    
+
     if (isFromMe) {
         if (isBroadcast) {
-            LOG_DEBUG("LoRabot text direction: TEXT_BROADCAST_BY_ME");
             return TEXT_BROADCAST_BY_ME;    // I broadcast a message
         } else {
-            LOG_DEBUG("LoRabot text direction: MY_TEXT_TO_SOMEONE");
             return MY_TEXT_TO_SOMEONE;      // I sent direct message
         }
     }
     
     if (isToMe && !isBroadcast) {
-        LOG_DEBUG("LoRabot text direction: TEXT_TO_ME_DIRECT");
+
         return TEXT_TO_ME_DIRECT;           // Direct message to me
     }
     
     if (isBroadcast && isFirstHop) {
-        LOG_DEBUG("LoRabot text direction: TEXT_BROADCAST_BY_OTHER");
         return TEXT_BROADCAST_BY_OTHER;     // Someone else broadcast
     }
-    
-    LOG_DEBUG("LoRabot text direction: TEXT_RELAYED");
+ 
     return TEXT_RELAYED;                    // Relayed message
 }
 
@@ -829,7 +782,7 @@ TextMessageAnalysis LoRabotModule::analyzeTextMessageDirection(const meshtastic_
         case TEXT_RELAYED:
             // Just background chatter
             analysis.shouldReact = false;
-            LOG_DEBUG("LoRabot: Relayed text message - not reacting");
+
             break;
     }
     
@@ -852,7 +805,7 @@ void LoRabotModule::initializeStepState() {
     stepState.totalNodeCount = 0;
     stepState.previousNodeCount = 0;
     
-    LOG_DEBUG("LoRabot: Step-based execution initialized");
+ 
 }
 
 // NEW: Execute pet state update step (Step 1)
@@ -908,11 +861,7 @@ int32_t LoRabotModule::executeSenderDetection() {
                     isSendingMessage = true; // Set flag immediately to prevent HAPPY state interference
                     triggerSenderState();
                 }
-                // STEP 4: Handle multiple packet transmissions (might be system packets)
-                else {
-                    LOG_DEBUG("LoRabot detected transmission but not a text message (txGood: %d -> %d, increase: %d)", 
-                              lastTxGoodCount, currentTxGood, txIncrease);
-                }
+
                 lastTxGoodCount = currentTxGood;
             }
         }
@@ -920,7 +869,7 @@ int32_t LoRabotModule::executeSenderDetection() {
     
     // Check if we've spent too much time
     if ((millis() - startTime) > MAX_STEP_TIME_MS) {
-        LOG_DEBUG("LoRabot: Sender detection took too long, yielding");
+
         return getUpdateInterval(); // Yield control
     }
     
@@ -938,18 +887,16 @@ int32_t LoRabotModule::executeDisplayUpdate() {
     // Clear the "showing new node" flag after timeout
     if (showingNewNode && (millis() - nodeDiscoveryTime) > 10000) {
         showingNewNode = false;
-        LOG_DEBUG("LoRabot clearing new node flag - returning to normal states");
+
     }
     
     // Clear sending flag if it gets stuck (safety timeout)
     if (isSendingMessage && (millis() - senderStartTime) > 5000) {
         isSendingMessage = false;
-        LOG_DEBUG("LoRabot clearing stuck sending flag");
     }
     
     // Check if we've spent too much time
     if ((millis() - startTime) > MAX_STEP_TIME_MS) {
-        LOG_DEBUG("LoRabot: Display update took too long, yielding");
         return getUpdateInterval(); // Yield control
     }
     
@@ -969,7 +916,6 @@ int32_t LoRabotModule::executeMessageProcessing() {
     
     // Check if we've spent too much time
     if ((millis() - startTime) > MAX_STEP_TIME_MS) {
-        LOG_DEBUG("LoRabot: Message processing took too long, yielding");
         return getUpdateInterval(); // Yield control
     }
     
@@ -989,7 +935,6 @@ int32_t LoRabotModule::executeCleanup() {
     
     // Check if we've spent too much time
     if ((millis() - startTime) > MAX_STEP_TIME_MS) {
-        LOG_DEBUG("LoRabot: Cleanup took too long, yielding");
         return getUpdateInterval(); // Yield control
     }
     
@@ -1048,7 +993,6 @@ int32_t LoRabotModule::executeNodeDiscoveryCheck() {
         lastStateChange = millis();
         displayNeedsUpdate = true;
         
-        LOG_DEBUG("LoRabot discovered new node: %s! Total nodes: %d", lastNodeName, totalNodeCount);
     }
     
     // Check if we've spent too much time
@@ -1068,30 +1012,25 @@ int32_t LoRabotModule::executeNodeDiscoveryCheck() {
 NodeDiscoveryType LoRabotModule::analyzeNodeDiscovery(size_t totalNodeCount, size_t previousNodeCount) {
     // Check for first boot (no previous nodes)
     if (previousNodeCount == 0) {
-        LOG_DEBUG("LoRabot node discovery: FIRST_BOOT_DETECTION");
         return FIRST_BOOT_DETECTION;
     }
     
     // Check if currently sending (interference)
     if (isSendingMessage) {
-        LOG_DEBUG("LoRabot node discovery: SENDING_INTERFERENCE");
         return SENDING_INTERFERENCE;
     }
     
     // Check if node count increased (new node discovered)
     if (totalNodeCount > previousNodeCount) {
-        LOG_DEBUG("LoRabot node discovery: NEW_NODE_DISCOVERED (from %d to %d)", previousNodeCount, totalNodeCount);
         return NEW_NODE_DISCOVERED;
     }
     
     // Check if node count changed (but decreased)
     if (totalNodeCount != previousNodeCount) {
-        LOG_DEBUG("LoRabot node discovery: NODE_COUNT_CHANGED (from %d to %d)", previousNodeCount, totalNodeCount);
         return NODE_COUNT_CHANGED;
     }
     
     // No change in node count
-    LOG_DEBUG("LoRabot node discovery: NODE_COUNT_UNCHANGED (%d)", totalNodeCount);
     return NODE_COUNT_UNCHANGED;
 }
 
@@ -1142,30 +1081,25 @@ NodeDiscoveryAnalysis LoRabotModule::analyzeNodeDiscoveryDirection(size_t totalN
                 }
             }
             
-            LOG_INFO("LoRabot: New node discovered - triggering HAPPY state");
             break;
         }
             
         case NODE_COUNT_CHANGED:
             // Node count changed but not a new node discovery
             analysis.shouldUpdateCount = true;
-            LOG_DEBUG("LoRabot: Node count changed but not triggering HAPPY state");
             break;
             
         case NODE_COUNT_UNCHANGED:
             // No change in node count
-            LOG_DEBUG("LoRabot: Node count unchanged (%d)", totalNodeCount);
             break;
             
         case FIRST_BOOT_DETECTION:
             // First boot, don't trigger HAPPY state
             analysis.shouldUpdateCount = true;
-            LOG_DEBUG("LoRabot: First boot detection - not triggering HAPPY state");
             break;
             
         case SENDING_INTERFERENCE:
             // Currently sending, don't trigger HAPPY state
-            LOG_DEBUG("LoRabot: Sending interference - not triggering HAPPY state");
             break;
     }
     
@@ -1186,7 +1120,6 @@ PetState LoRabotModule::handleSleepyStateCycling() {
         // IMMEDIATELY update the state and trigger UI update
         currentState = SLEEPY1;
         displayNeedsUpdate = true;
-        LOG_DEBUG("LoRabot: Entering sleepy state - starting with SLEEPY1");
         return SLEEPY1;
     }
     
@@ -1199,11 +1132,9 @@ PetState LoRabotModule::handleSleepyStateCycling() {
         if (currentSleepyFace) {
             currentState = SLEEPY2;
             displayNeedsUpdate = true;
-            LOG_DEBUG("LoRabot: Cycling to SLEEPY2");
         } else {
             currentState = SLEEPY1;
             displayNeedsUpdate = true;
-            LOG_DEBUG("LoRabot: Cycling to SLEEPY1");
         }
     }
     

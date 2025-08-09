@@ -22,7 +22,7 @@ enum PetState : uint8_t {
     SLEEPY1,         // Renamed from BORED
     SLEEPY2,         // Renamed from SLEEPY
     GRATEFUL,
-    INTENSE,
+    BLINK,           // Replaces INTENSE - quick eye blink animation
     DEMOTIVATED,
     SENDER
 };
@@ -107,7 +107,7 @@ struct LoRabotStepState {
 struct PetPersonality {
     uint8_t excited_threshold = 5;
     uint16_t bored_threshold_mins = 30;
-    uint8_t sleepy_start_hour = 23;
+    uint8_t sleepy_start_hour = 1;
     uint8_t sleepy_end_hour = 6;
     uint8_t friend_bond_threshold = 3;
 };
@@ -158,11 +158,11 @@ private:
     char receivedMessageText[64];  // Store actual received message
     uint8_t funnyMessageIndex;     // Track which funny message to show
     
-    // INTENSE state tracking
-    uint32_t messageTimes[5];      // Track last 5 message times
-    uint8_t messageIndex;          // Current index in circular buffer
-    bool inIntenseState;           // Currently in INTENSE state
-    uint32_t intenseStartTime;     // When INTENSE state started
+    // BLINK state tracking
+    bool inBlinkState;             // Currently in BLINK animation
+    uint32_t blinkStartTime;       // When BLINK animation started
+    uint32_t nextBlinkTime;        // When next blink should occur (random 2-5 seconds)
+    uint32_t lastBlinkCheckTime;   // Last time we checked for blink timing
     
 
     
@@ -233,8 +233,8 @@ private:
     // Check if battery is low
     bool isLowBattery();
     
-    // Check if INTENSE state should be triggered
-    bool shouldTriggerIntense();
+    // Check if BLINK state should be triggered
+    bool shouldTriggerBlink();
     
 
     
