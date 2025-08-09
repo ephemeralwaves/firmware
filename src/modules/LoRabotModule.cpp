@@ -572,7 +572,6 @@ PetState LoRabotModule::calculateNewState() {
             blinkStartTime = now;
             currentState = BLINK;
             displayNeedsUpdate = true;
-            LOG_DEBUG("LoRabot: Triggering BLINK from AWAKE");
             return BLINK;
         }
         
@@ -587,17 +586,17 @@ PetState LoRabotModule::calculateNewState() {
                 case 0: // Looking Left
                     currentState = LOOKING_AROUND_LEFT;
                     displayNeedsUpdate = true;
-                    LOG_DEBUG("LoRabot: Cycling to LOOKING_AROUND_LEFT");
+
                     break;
                 case 1: // Looking Right
                     currentState = LOOKING_AROUND_RIGHT;
                     displayNeedsUpdate = true;
-                    LOG_DEBUG("LoRabot: Cycling to LOOKING_AROUND_RIGHT");
+  
                     break;
                 case 2: // Awake
                     currentState = AWAKE;
                     displayNeedsUpdate = true;
-                    LOG_DEBUG("LoRabot: Cycling to AWAKE");
+       
                     // Don't trigger blink immediately, wait for random interval
                     break;
                 default:
@@ -823,7 +822,7 @@ int32_t LoRabotModule::executePetStateUpdate() {
     
     // Check if we've spent too much time
     if ((millis() - startTime) > MAX_STEP_TIME_MS) {
-        LOG_DEBUG("LoRabot: Pet state update took too long, yielding");
+    
         return getUpdateInterval(); // Yield control
     }
     
@@ -870,10 +869,8 @@ int32_t LoRabotModule::executeSenderDetection() {
                         if (inExcitedState || currentState == HAPPY) {
                             // Don't trigger SENDER when we're already excited from receiving a message
                             // This prevents false positives from automatic responses to received messages
-                            LOG_DEBUG("LoRabot detected transmission while in EXCITED/HAPPY state - likely automatic response, not triggering SENDER");
                         } else {
                             // Single packet transmission without relay and not in excited state - likely a direct message
-                            LOG_INFO("LoRabot detected single packet transmission (non-relay) - likely direct message, triggering SENDER state");
                             isSendingMessage = true; // Set flag immediately to prevent HAPPY state interference
                             triggerSenderState();
                         }
@@ -1020,7 +1017,6 @@ int32_t LoRabotModule::executeNodeDiscoveryCheck() {
     
     // Check if we've spent too much time
     if ((millis() - startTime) > MAX_STEP_TIME_MS) {
-        LOG_DEBUG("LoRabot: Node discovery check took too long, yielding");
         return getUpdateInterval(); // Yield control
     }
     
