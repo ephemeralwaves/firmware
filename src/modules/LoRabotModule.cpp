@@ -199,6 +199,7 @@ int32_t LoRabotModule::runOnce() {
 }
 
 // Handle received mesh packets
+//NOT outgoing ones, this function needs cleaning up
 ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
     // Track network activity
     processNetworkEvent();
@@ -224,7 +225,7 @@ ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
             // LOG_INFO("LoRabot received message: '%s'", receivedMessageText);
         } else {
             // For position updates or empty messages, use a generic message
-            strcpy(receivedMessageText, "Position update!");
+            strcpy(receivedMessageText, "Position\nupdate!");
         }
         
        // LOG_INFO("LoRabot received message (port %d) - triggering excited/grateful cycle!", mp.decoded.portnum);
@@ -468,8 +469,9 @@ bool LoRabotModule::isNightTime() {
     }
     
     uint8_t hour = timeinfo.tm_hour;
-
-    return false;
+    return (hour >= personality.sleepy_start_hour || hour < personality.sleepy_end_hour);
+    //for testing
+    // return false;
 }
 
 // Check if battery is low

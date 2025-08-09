@@ -107,7 +107,7 @@ struct LoRabotStepState {
 struct PetPersonality {
     uint8_t excited_threshold = 5;
     uint16_t bored_threshold_mins = 30;
-    uint8_t sleepy_start_hour = 1;
+    uint8_t sleepy_start_hour = 23;
     uint8_t sleepy_end_hour = 6;
     uint8_t friend_bond_threshold = 3;
 };
