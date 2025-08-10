@@ -11,6 +11,7 @@
 #include "OLEDDisplay.h"
 #include "OLEDDisplayUi.h"
 #include "TextMessageModule.h" // Added for isFromUs
+#include "PowerStatus.h" // Added for battery status
 
 // Pet emotional states
 enum PetState : uint8_t {

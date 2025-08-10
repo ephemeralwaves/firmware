@@ -30,7 +30,6 @@ const char* const LoRabotModule::FACES[11] PROGMEM = {
     "(  ' . ')>"    // SENDER - messages sent by node, can be any type of data (text, position, telemetry, etc.)
 };
 
-// Human-readable state names for debugging
 const char* const LoRabotModule::STATE_NAMES[11] PROGMEM = {
     "Awake",
     "Looking R",
@@ -231,13 +230,11 @@ ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
             memcpy(receivedMessageText, mp.decoded.payload.bytes, copyLen);
             receivedMessageText[copyLen] = '\0'; // Ensure null termination
             
-            // LOG_INFO("LoRabot received message: '%s'", receivedMessageText);
         } else {
             // For position updates or empty messages, use a generic message
             strcpy(receivedMessageText, "Position\nupdate!");
         }
         
-       // LOG_INFO("LoRabot received message (port %d) - triggering excited/grateful cycle!", mp.decoded.portnum);
         
         // IMMEDIATELY update state to EXCITED - don't wait for timing
         previousState = currentState;
@@ -410,7 +407,6 @@ void LoRabotModule::updatePetState() {
         lastStateChange = now;
         displayNeedsUpdate = true;
         
-        LOG_DEBUG("LoRabot: State changed from %d to %d", previousState, currentState);
     }
     
     // Save state periodically
@@ -464,21 +460,19 @@ bool LoRabotModule::isNightTime() {
         return false; // If no time available, assume daytime
     }
     
-    uint8_t hour = timeinfo.tm_hour;
+    // uint8_t hour = timeinfo.tm_hour;  // Commented out to avoid unused variable warning
     //logic for overnight night time
     //return (hour >= personality.sleepy_start_hour || hour < personality.sleepy_end_hour);
     //for testing
      return false;
 }
 
-// Check if battery is low
+// Check if battery is low (below 10%)
 bool LoRabotModule::isLowBattery() {
-    // TODO: Implement when battery API is found
-    return false;  // For now, assume battery is always OK
+    // Get battery percentage from power module
+    uint8_t batteryPercent = powerStatus->getBatteryChargePercent();
+    return (batteryPercent < 10);
 }
-
-// shouldTriggerBlink() removed - blink timing now handled in calculateNewState()
-
 
 
 // Check if SENDER state should be triggered (sent messages)
@@ -491,9 +485,6 @@ bool LoRabotModule::shouldTriggerSender() {
 // Calculate new pet state based on current conditions
 PetState LoRabotModule::calculateNewState() {
     uint32_t now = millis();
-    
-    // BLINK state logic moved to new animation system below
-    
 
     
     // Check for SENDER state
@@ -527,12 +518,19 @@ PetState LoRabotModule::calculateNewState() {
     }
     
     // Check for specific priority states first
-    if (isNightTime() || isLowBattery()) {
+    if (isNightTime()) {
         // Enter sleepy state with cycling between SLEEPY1 and SLEEPY2
         return handleSleepyStateCycling();
     } else {
-        // Force exit from sleepy state since isNightTime() and isLowBattery() are both false
+        // Force exit from sleepy state since isNightTime() is false
         inSleepyState = false;
+    }
+    
+    // Check for low battery - trigger DEMOTIVATED state (high priority)
+    if (isLowBattery()) {
+        uint8_t batteryPercent = powerStatus->getBatteryChargePercent();
+        LOG_DEBUG("LoRabot: Battery at %d%% - triggering DEMOTIVATED state", batteryPercent);
+        return DEMOTIVATED;
     }
     
     // Check for recent node discovery (highest priority) - show HAPPY when new node found
@@ -550,14 +548,12 @@ PetState LoRabotModule::calculateNewState() {
                 lookingCycle = 0; // Start with looking left
                 nextLookingTime = now + 500; // First looking change in 500ms
                 nextPhaseTime = now + 2000 + random(0, 1000); // Looking phase lasts 2-3 seconds
-                LOG_DEBUG("LoRabot: Switching to LOOKING phase");
             } else {
                 // Switch to AWAKE phase  
                 currentPhase = AWAKE_PHASE;
                 awakeStartTime = now;
                 nextBlinkTime = now + 1000 + random(0, 2000); // Next blink in 1-3 seconds
                 nextPhaseTime = now + 6000 + random(0, 2000); // Awake phase lasts 6-8 seconds
-                LOG_DEBUG("LoRabot: Switching to AWAKE phase");
             }
             phaseStartTime = now;
         }
@@ -568,11 +564,10 @@ PetState LoRabotModule::calculateNewState() {
             
             // Handle BLINK state (highest priority in AWAKE phase)
             if (inBlinkState) {
-                if ((now - blinkStartTime) >= 500) { // Blink duration: 500ms
+                if ((now - blinkStartTime) >= 200) { // Blink duration: 200ms
                     inBlinkState = false;
                     awakeStartTime = now; // Reset awake timer after blink
                     nextBlinkTime = now + 1000 + random(0, 2000); // Next blink in 1-3 seconds
-                    LOG_DEBUG("LoRabot: BLINK ended, returning to AWAKE");
                     return AWAKE;
                 }
                 return BLINK; // Stay in BLINK
@@ -583,7 +578,6 @@ PetState LoRabotModule::calculateNewState() {
                 inBlinkState = true;
                 blinkStartTime = now;
                 displayNeedsUpdate = true;
-                LOG_DEBUG("LoRabot: BLINK triggered!");
                 return BLINK;
             }
             
@@ -596,7 +590,6 @@ PetState LoRabotModule::calculateNewState() {
             if (now >= nextLookingTime) {
                 lookingCycle = (lookingCycle + 1) % 3;
                 nextLookingTime = now + 500; // 500ms between looking changes
-                LOG_DEBUG("LoRabot: Looking cycle: %d", lookingCycle);
             }
             
             switch (lookingCycle) {
@@ -607,16 +600,17 @@ PetState LoRabotModule::calculateNewState() {
             }
         }
         
-        // Rotate funny messages every 6 seconds (independent of animation)
-        if ((now - lastFunnyMessageTime) >= 6000) {
-            funnyMessageIndex = (funnyMessageIndex + 1) % 8; // Rotate through 8 funny messages
-            lastFunnyMessageTime = now;
-        }
-        
     } else {
         // No nodes present, stay in AWAKE phase but no blinking
         currentPhase = AWAKE_PHASE;
         return AWAKE;
+    }
+    
+    // Rotate funny messages every 6 seconds (independent of animation and node count)
+    if ((now - lastFunnyMessageTime) >= 6000) {
+        funnyMessageIndex = (funnyMessageIndex + 1) % 8; // Rotate through 8 funny messages
+        lastFunnyMessageTime = now;
+        LOG_DEBUG("LoRabot: Funny message rotated to index %d", funnyMessageIndex);
     }
 }
 
@@ -763,25 +757,21 @@ TextMessageAnalysis LoRabotModule::analyzeTextMessageDirection(const meshtastic_
         case MY_TEXT_TO_SOMEONE:
             // I sent a text message to someone! Pet gets SENDER state
             analysis.suggestedState = SENDER;
-            LOG_INFO("LoRabot: I sent direct text to 0x%08x - triggering SENDER state", mp.to);
             break;
             
         case TEXT_BROADCAST_BY_ME:
             // I broadcast a message! Pet gets SENDER state
             analysis.suggestedState = SENDER;
-            LOG_INFO("LoRabot: I broadcast text - triggering SENDER state");
             break;
             
         case TEXT_TO_ME_DIRECT:
             // Someone texted me directly! Pet gets excited
             analysis.suggestedState = EXCITED;
-            LOG_INFO("LoRabot: Got direct text from 0x%08x - triggering EXCITED state", mp.from);
             break;
             
         case TEXT_BROADCAST_BY_OTHER:
             // Someone else broadcast
             analysis.suggestedState = EXCITED;
-            LOG_INFO("LoRabot: Got broadcast text from 0x%08x - triggering EXCITED state", mp.from);
             break;
             
         case TEXT_RELAYED:
@@ -852,7 +842,6 @@ int32_t LoRabotModule::executeSenderDetection() {
                 // STEP 2: Try to correlate with text message detection from handleReceived()
                 if (pendingSenderTrigger && (now - lastTextMessageTxTime) < 500) { // Reduced window for better correlation
                     // We detected a text message pattern AND txGood increased - this is likely a text message
-                    LOG_INFO("LoRabot detected text message transmission via correlation - triggering SENDER state");
                     isSendingMessage = true; // Set flag immediately to prevent HAPPY state interference
                     triggerSenderState();
                     pendingSenderTrigger = false; // Clear the flag
@@ -875,7 +864,6 @@ int32_t LoRabotModule::executeSenderDetection() {
                         }
                     } else {
                         // This was a relay transmission, don't trigger SENDER
-                        LOG_DEBUG("LoRabot detected relay transmission (txGood: +%d, txRelay: +%d) - not triggering SENDER", txIncrease, txRelayIncrease);
                     }
                     
                     lastTxRelayCount = currentTxRelay;
