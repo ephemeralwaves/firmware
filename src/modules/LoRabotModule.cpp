@@ -462,9 +462,9 @@ bool LoRabotModule::isNightTime() {
     
     // uint8_t hour = timeinfo.tm_hour;  // Commented out to avoid unused variable warning
     //logic for overnight night time
-    //return (hour >= personality.sleepy_start_hour || hour < personality.sleepy_end_hour);
+    return (hour >= personality.sleepy_start_hour || hour < personality.sleepy_end_hour);
     //for testing
-     return false;
+    // return false;
 }
 
 // Check if battery is low (below 10%)
@@ -490,7 +490,6 @@ PetState LoRabotModule::calculateNewState() {
     if ((now - lastFunnyMessageTime) >= 6000) {
         funnyMessageIndex = (funnyMessageIndex + 1) % 8; // Rotate through 8 funny messages
         lastFunnyMessageTime = now;
-        LOG_DEBUG("LoRabot: Funny message rotated to index %d", funnyMessageIndex);
     }
 
     
@@ -536,7 +535,6 @@ PetState LoRabotModule::calculateNewState() {
     // Check for low battery - trigger DEMOTIVATED state (high priority)
     if (isLowBattery()) {
         uint8_t batteryPercent = powerStatus->getBatteryChargePercent();
-        LOG_DEBUG("LoRabot: Battery at %d%% - triggering DEMOTIVATED state", batteryPercent);
         return DEMOTIVATED;
     }
     
@@ -616,7 +614,7 @@ PetState LoRabotModule::calculateNewState() {
 
 // Get update interval based on current state and activity
 uint32_t LoRabotModule::getUpdateInterval() {
-    uint32_t baseInterval = 30; // 30ms baseline timing
+    uint32_t baseInterval = 30; // 30ms baseline timing - reduced from 30ms to improve UI responsiveness
     return baseInterval;
     
 }
@@ -624,8 +622,7 @@ uint32_t LoRabotModule::getUpdateInterval() {
 // Get current face string
 const char* LoRabotModule::getCurrentFace() {
     if (currentState >= 11) {
-        LOG_WARN("LoRabot invalid state: %d, using fallback", currentState);
-        return (const char*)pgm_read_ptr(&FACES[AWAKE]); // Fallback to demotivated
+        return (const char*)pgm_read_ptr(&FACES[AWAKE]); // Fallback to awake
     }
     
     const char* face = (const char*)pgm_read_ptr(&FACES[currentState]);
