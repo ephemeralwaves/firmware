@@ -485,6 +485,13 @@ bool LoRabotModule::shouldTriggerSender() {
 // Calculate new pet state based on current conditions
 PetState LoRabotModule::calculateNewState() {
     uint32_t now = millis();
+    
+    // Rotate funny messages every 6 seconds (independent of animation and node count)
+    if ((now - lastFunnyMessageTime) >= 6000) {
+        funnyMessageIndex = (funnyMessageIndex + 1) % 8; // Rotate through 8 funny messages
+        lastFunnyMessageTime = now;
+        LOG_DEBUG("LoRabot: Funny message rotated to index %d", funnyMessageIndex);
+    }
 
     
     // Check for SENDER state
@@ -605,13 +612,6 @@ PetState LoRabotModule::calculateNewState() {
         currentPhase = AWAKE_PHASE;
         return AWAKE;
     }
-    
-    // Rotate funny messages every 6 seconds (independent of animation and node count)
-    if ((now - lastFunnyMessageTime) >= 6000) {
-        funnyMessageIndex = (funnyMessageIndex + 1) % 8; // Rotate through 8 funny messages
-        lastFunnyMessageTime = now;
-        LOG_DEBUG("LoRabot: Funny message rotated to index %d", funnyMessageIndex);
-    }
 }
 
 // Get update interval based on current state and activity
@@ -679,7 +679,6 @@ bool LoRabotModule::isMyOutgoingTextMessage(const meshtastic_MeshPacket &mp) {
     bool isOutgoing = (mp.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) &&
                      (mp.from == myNodeNum) &&                    // From me
                      (mp.to != myNodeNum);                        // Not to myself
-    
     
     return isOutgoing;
 }
