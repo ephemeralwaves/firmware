@@ -460,7 +460,7 @@ bool LoRabotModule::isNightTime() {
         return false; // If no time available, assume daytime
     }
     
-    // uint8_t hour = timeinfo.tm_hour;  // Commented out to avoid unused variable warning
+    uint8_t hour = timeinfo.tm_hour;  
     //logic for overnight night time
     return (hour >= personality.sleepy_start_hour || hour < personality.sleepy_end_hour);
     //for testing
@@ -492,7 +492,6 @@ PetState LoRabotModule::calculateNewState() {
         lastFunnyMessageTime = now;
     }
 
-    
     // Check for SENDER state
     if (inSenderState) {
         //sender state is triggered when a message is sent, and stays for 2 seconds
@@ -1071,7 +1070,7 @@ NodeDiscoveryAnalysis LoRabotModule::analyzeNodeDiscoveryDirection(size_t totalN
             
             // Generate node name based on available information
             if (analysis.newestNode) {
-                const int MAX_DISPLAY_LENGTH = 24; // Same as "LoRa? More like explore-a!"
+                const int MAX_DISPLAY_LENGTH = 24; // Same length as "LoRa? More like explore-a!"
                 const int HELLO_OVERHEAD = 7;      // "Hello " + "!" = 7 characters
                 const int MAX_NAME_LENGTH = MAX_DISPLAY_LENGTH - HELLO_OVERHEAD; // 17 characters max
                 
