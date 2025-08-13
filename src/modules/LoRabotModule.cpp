@@ -470,18 +470,40 @@ bool LoRabotModule::isFriend(uint32_t nodeId) {
     return false;
 }
 
-// Check if it's night time
+// Check if it's night time - SMART CACHING VERSION
 bool LoRabotModule::isNightTime() {
-    struct tm timeinfo;
-    if (!getLocalTime(&timeinfo)) {
-        return false; // If no time available, assume daytime
+    static uint32_t lastTimeCheck = 0;
+    static bool cachedNightTime = false;
+    static bool timeSyncFailed = false;
+    static uint32_t timeCheckInterval = 30000; // 30 seconds when time sync works
+    static uint32_t failedTimeCheckInterval = 600000; // 10 minutes when time sync fails
+    
+    uint32_t now = millis();
+    
+    // Determine check interval based on previous success/failure
+    uint32_t checkInterval = timeSyncFailed ? failedTimeCheckInterval : timeCheckInterval;
+    
+    // Only check time periodically to avoid repeated failures
+    if ((now - lastTimeCheck) < checkInterval) {
+        return cachedNightTime; // Return cached result
     }
     
-    uint8_t hour = timeinfo.tm_hour;  
-    //logic for overnight night time
-    return (hour >= personality.sleepy_start_hour || hour < personality.sleepy_end_hour);
-    //for testing
-    // return false;
+    lastTimeCheck = now;
+    
+    // Try to get time
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+        // Time sync succeeded - use real time
+        timeSyncFailed = false;
+        uint8_t hour = timeinfo.tm_hour;
+        cachedNightTime = (hour >= personality.sleepy_start_hour || hour < personality.sleepy_end_hour);
+    } else {
+        // Time sync failed - assume daytime and wait longer before next attempt
+        timeSyncFailed = true;
+        cachedNightTime = false; // Assume daytime when time sync fails
+    }
+    
+    return cachedNightTime;
 }
 
 // Check if battery is low (below 10%)
@@ -540,22 +562,14 @@ PetState LoRabotModule::calculateNewState() {
         }
     }
     
-    // Check for specific priority states first - TEMPORARILY DISABLED
-    // uint32_t nightStart = millis();
-    // if (isNightTime()) {
-    //     uint32_t nightTime = millis() - nightStart;
-    //     if (nightTime > 10) {
-    //         LOG_INFO("LoRabot: isNightTime() took %dms", nightTime);
-    //     }
-    //     // Enter sleepy state with cycling between SLEEPY1 and SLEEPY2
-    //     return handleSleepyStateCycling();
-    // } else {
-    //     // Force exit from sleepy state since isNightTime() is false
-    //     inSleepyState = false;
-    // }
-    
-    // TEMPORARY FIX: Skip time check entirely to restore button responsiveness
-    inSleepyState = false;
+    // Check for specific priority states first - SIMPLE TIME CHECK
+    if (isNightTime()) {
+        // Enter sleepy state with cycling between SLEEPY1 and SLEEPY2
+        return handleSleepyStateCycling();
+    } else {
+        // Force exit from sleepy state since isNightTime() is false
+        inSleepyState = false;
+    }
     
     // Check for low battery - trigger DEMOTIVATED state (high priority)
     if (isLowBattery()) {
