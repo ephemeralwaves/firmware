@@ -24,7 +24,7 @@ const char* const LoRabotModule::FACES[11] PROGMEM = {
     "( * o * )",    // EXCITED - messages received (triggers excited/grateful cycle)
     "(~ o ~)",    // SLEEPY1 - night hours
     "(~ - ~)",    // SLEEPY2 - night hours
-    "( ^ o ^ )",    // GRATEFUL - thankful for received messages
+    "( * u * )",    // GRATEFUL - thankful for received messages
     "( - . - )",    // BLINK - quick eye blink animation
     "( v _ v )",    // DEMOTIVATED - low battery
     "(  ' . ')>"    // SENDER - messages sent by node, can be any type of data (text, position, telemetry, etc.)
@@ -105,10 +105,10 @@ LoRabotModule::LoRabotModule() :
     memset(receivedMessageText, 0, sizeof(receivedMessageText));
     funnyMessageIndex = 0;
     
-    // Initialize BLINK state tracking
+    // Initialize BLINK state tracking - FASTER BLINKING
     inBlinkState = false;
     blinkStartTime = 0;
-    nextBlinkTime = millis() + random(1500, 3000); // First blink in 1.5-3 seconds
+    nextBlinkTime = millis() + random(1000, 2000); // First blink in 1-2 seconds
     lastBlinkCheckTime = 0;
     
 
@@ -525,8 +525,8 @@ bool LoRabotModule::shouldTriggerSender() {
 PetState LoRabotModule::calculateNewState() {
     uint32_t now = millis();
     
-    // Rotate funny messages every 2 seconds for more lively animation
-    if ((now - lastFunnyMessageTime) >= 2000) {
+    // Rotate funny messages every 6 seconds for more lively animation
+    if ((now - lastFunnyMessageTime) >= 6000) {
         funnyMessageIndex = (funnyMessageIndex + 1) % 8; // Rotate through 8 funny messages
         lastFunnyMessageTime = now;
         displayNeedsUpdate = true; // Force display update when message changes
@@ -581,62 +581,33 @@ PetState LoRabotModule::calculateNewState() {
         return HAPPY;
     }
     
-    // Simplified Animation System: Direct state cycling with 2-second intervals
+    // Dual-Cycle Animation System: Looking Cycle + Blinking Cycle
     if (currentNodeCount > 0) {
-        // Handle BLINK state (highest priority)
+        // Handle active BLINK state
         if (inBlinkState) {
-            if ((now - blinkStartTime) >= 300) { // Blink duration: 300ms (reduced for faster response)
+            bool blinkComplete = (now - blinkStartTime) >= 150; // 150ms blink duration
+            if (blinkComplete) {
                 inBlinkState = false;
-                nextBlinkTime = now + 3000 + random(0, 1000); // Next blink in 3-4 seconds
                 return AWAKE;
             }
-            return BLINK; // Stay in BLINK
-        }
-        
-        // Check if it's time to blink
-        if (now >= nextBlinkTime) {
-            inBlinkState = true;
-            blinkStartTime = now;
-            displayNeedsUpdate = true;
             return BLINK;
         }
         
-        // Super simple state cycling: change every 1 second for visible animation
-        uint32_t cycleTime = (now - phaseStartTime) / 1000; // 1 second per state for faster animation
-        uint32_t stateIndex = cycleTime % 3; // 3 states: 0=AWAKE, 1=LEFT, 2=RIGHT
+        // Calculate animation timing
+        uint32_t cycleTime = (now - phaseStartTime) / 1000; // 1 second per state
+        uint32_t cycleNumber = cycleTime / 6; // 6 seconds per complete cycle
+        bool isBlinkingCycle = (cycleNumber % 2) == 1; // Alternate cycles
         
-        // Force display update every cycle to ensure changes are visible
-        if (cycleTime != lastCycleTime) {
-            displayNeedsUpdate = true;
-            lastCycleTime = cycleTime;
+        // Execute blinking cycle: AWAKE → BLINK → AWAKE (repeat 3x)
+        if (isBlinkingCycle) {
+            return executeBlinkingCycle(cycleTime);
         }
         
-        switch (stateIndex) {
-            case 0: return AWAKE;
-            case 1: return LOOKING_AROUND_LEFT;
-            case 2: return LOOKING_AROUND_RIGHT;
-            default: return AWAKE;
-        }
-        
+        // Execute looking cycle: AWAKE → LOOKING_RIGHT → LOOKING_LEFT → AWAKE (repeat 3x)
+        return executeLookingCycle(cycleTime);
     } else {
-        // No nodes present, just AWAKE with occasional blinking
-        if (inBlinkState) {
-            if ((now - blinkStartTime) >= 300) {
-                inBlinkState = false;
-                nextBlinkTime = now + 8000 + random(0, 2000); // Next blink in 8-10 seconds
-                return AWAKE;
-            }
-            return BLINK;
-        }
-        
-        if (now >= nextBlinkTime) {
-            inBlinkState = true;
-            blinkStartTime = now;
-            displayNeedsUpdate = true;
-            return BLINK;
-        }
-        
-        return AWAKE;
+        // No nodes present - simple AWAKE with structured blinking
+        return executeNoNodesAnimation(now);
     }
 }
 
@@ -1212,4 +1183,66 @@ PetState LoRabotModule::handleSleepyStateCycling() {
     
     // Return current face (this should match currentState now)
     return currentState;
+}
+
+// Execute blinking cycle: AWAKE → BLINK → AWAKE (repeat 3x)
+PetState LoRabotModule::executeBlinkingCycle(uint32_t cycleTime) {
+    uint32_t blinkSubState = (cycleTime % 6) % 2; // 0=AWAKE, 1=BLINK
+    
+    if (blinkSubState == 1) {
+        // Time to blink
+        if (!inBlinkState) {
+            inBlinkState = true;
+            blinkStartTime = millis();
+            displayNeedsUpdate = true;
+        }
+        return BLINK;
+    }
+    
+    return AWAKE;
+}
+
+// Execute looking cycle: AWAKE → LOOKING_RIGHT → LOOKING_LEFT → AWAKE (repeat 3x)
+PetState LoRabotModule::executeLookingCycle(uint32_t cycleTime) {
+    uint32_t lookingCycleState = (cycleTime % 6) / 2; // 0, 1, 2 for the 3 repetitions
+    uint32_t lookingSubState = (cycleTime % 6) % 2; // 0=AWAKE, 1=LOOKING
+    
+    if (lookingSubState == 0) {
+        return AWAKE;
+    }
+    
+    // Alternate between LEFT and RIGHT for each repetition
+    if (lookingCycleState % 2 == 0) {
+        return LOOKING_AROUND_RIGHT;
+    }
+    
+    return LOOKING_AROUND_LEFT;
+}
+
+// Execute no-nodes animation: simple AWAKE with structured blinking
+PetState LoRabotModule::executeNoNodesAnimation(uint32_t now) {
+    // Handle active BLINK state
+    if (inBlinkState) {
+        bool blinkComplete = (now - blinkStartTime) >= 150; // 150ms blink duration
+        if (blinkComplete) {
+            inBlinkState = false;
+            return AWAKE;
+        }
+        return BLINK;
+    }
+    
+    // Simple blinking pattern: blink every 2 seconds
+    uint32_t blinkCycle = (now - phaseStartTime) / 2000; // 2 seconds per blink cycle
+    bool shouldBlink = (blinkCycle % 2 == 1); // Every odd cycle is a blink
+    
+    if (shouldBlink) {
+        if (!inBlinkState) {
+            inBlinkState = true;
+            blinkStartTime = now;
+            displayNeedsUpdate = true;
+        }
+        return BLINK;
+    }
+    
+    return AWAKE;
 }

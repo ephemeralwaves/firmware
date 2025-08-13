@@ -288,6 +288,11 @@ private:
     int32_t executeCleanup();
     void initializeStepState();
     
+    // Animation cycle helper functions
+    PetState executeBlinkingCycle(uint32_t cycleTime);
+    PetState executeLookingCycle(uint32_t cycleTime);
+    PetState executeNoNodesAnimation(uint32_t now);
+    
     // Static arrays for faces and messages
     static const char* const FACES[11];
     static const char* const STATE_NAMES[11];
