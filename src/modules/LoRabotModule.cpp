@@ -148,7 +148,10 @@ LoRabotModule::LoRabotModule() :
     lookingCycle = 0; // 0=left, 1=right, 2=awake
     nextLookingTime = now + 500; // 500ms for looking cycle
     
-    lastFunnyMessageTime = 0; // Track funny message rotation separately (every 3 seconds)
+    lastFunnyMessageTime = 0; // Track funny message rotation separately (every 4 seconds)
+    
+    // Initialize animation tracking
+    lastCycleTime = 0;
     
     // NEW: Initialize step-based execution state
     initializeStepState();
@@ -279,10 +282,7 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
     // Remove unused variable to eliminate warning
     // const char* stateName = (const char*)pgm_read_ptr(&STATE_NAMES[currentState]);
     
-    // Remove heavy logging that was causing performance issues
-    // LOG_INFO("LoRabot drawFrame called - state: %d (%s), face: %s, inExcitedState: %s", 
-    //          currentState, stateName, currentFace, inExcitedState ? "YES" : "NO");
-    
+
     // Always draw the frame (screen system expects this)
     // Clear the frame area completely
     //display->setColor(BLACK);
@@ -319,11 +319,11 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
     if (now - lastDrawTime > 2000) {
         lastDrawTime = now;
         
-                 if (currentState == HAPPY && showingNewNode) {
-             // Show the discovered node name when happy (new node found) - on the right side
-             display->setFont(ArialMT_Plain_10);
-             display->drawString(x + 64, y + 50, lastNodeName);
-         } else if (currentState == SENDER) {
+        if (currentState == HAPPY && showingNewNode) {
+            // Show the discovered node name when happy (new node found) - on the right side
+            display->setFont(ArialMT_Plain_10);
+            display->drawString(x + 64, y + 50, lastNodeName);
+        } else if (currentState == SENDER) {
             // Show sender messages for SENDER state
             const char* senderMsg = (const char*)pgm_read_ptr(&SENDER_MESSAGES[senderMessageIndex]);
             display->setFont(ArialMT_Plain_10);
@@ -342,12 +342,15 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
             // Only recalculate if node count changed or time expired
             if (currentNodeCount != lastNodeCount || (now - lastFavoriteCountTime > 15000)) { // Increased to 15 seconds
                 uint32_t favoriteCount = 0;
-                for (size_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
+                size_t totalNodes = nodeDB->getNumMeshNodes();
+                
+                for (size_t i = 0; i < totalNodes; i++) {
                     const meshtastic_NodeInfoLite* node = nodeDB->getMeshNodeByIndex(i);
                     if (node && node->is_favorite) {
                         favoriteCount++;
                     }
                 }
+                
                 lastFavoriteCount = favoriteCount;
                 lastFavoriteCountTime = now;
                 lastNodeCount = currentNodeCount;
@@ -406,12 +409,26 @@ void LoRabotModule::updatePetState() {
         currentState = newState;
         lastStateChange = now;
         displayNeedsUpdate = true;
-        
     }
     
-    // Save state periodically
-    if ((now - lastStateChange) > 60000) { // Every minute
-        saveState();
+    // Save state periodically - NON-BLOCKING
+    static uint32_t lastSaveAttempt = 0;
+    if ((now - lastStateChange) > 60000 && (now - lastSaveAttempt) > 60000) { // Every minute
+        lastSaveAttempt = now;
+        LOG_INFO("LoRabot: Attempting to save state...");
+        
+        // Don't call saveState() here - it's blocking for 5+ seconds!
+        // Instead, we'll handle this differently
+        // saveState(); // ← REMOVED - This was causing the 5-second delay!
+    }
+    
+    // Monitor memory usage every 30 seconds
+    static uint32_t lastMemoryCheck = 0;
+    if ((now - lastMemoryCheck) > 30000) { // Every 30 seconds
+        lastMemoryCheck = now;
+        uint32_t freeHeap = ESP.getFreeHeap();
+        uint32_t minFreeHeap = ESP.getMinFreeHeap();
+        LOG_INFO("LoRabot: Memory - Free: %d, Min: %d", freeHeap, minFreeHeap);
     }
 }
 
@@ -486,10 +503,11 @@ bool LoRabotModule::shouldTriggerSender() {
 PetState LoRabotModule::calculateNewState() {
     uint32_t now = millis();
     
-    // Rotate funny messages every 6 seconds (independent of animation and node count)
-    if ((now - lastFunnyMessageTime) >= 6000) {
+    // Rotate funny messages every 2 seconds for more lively animation
+    if ((now - lastFunnyMessageTime) >= 2000) {
         funnyMessageIndex = (funnyMessageIndex + 1) % 8; // Rotate through 8 funny messages
         lastFunnyMessageTime = now;
+        displayNeedsUpdate = true; // Force display update when message changes
     }
 
     // Check for SENDER state
@@ -522,18 +540,25 @@ PetState LoRabotModule::calculateNewState() {
         }
     }
     
-    // Check for specific priority states first
-    if (isNightTime()) {
-        // Enter sleepy state with cycling between SLEEPY1 and SLEEPY2
-        return handleSleepyStateCycling();
-    } else {
-        // Force exit from sleepy state since isNightTime() is false
-        inSleepyState = false;
-    }
+    // Check for specific priority states first - TEMPORARILY DISABLED
+    // uint32_t nightStart = millis();
+    // if (isNightTime()) {
+    //     uint32_t nightTime = millis() - nightStart;
+    //     if (nightTime > 10) {
+    //         LOG_INFO("LoRabot: isNightTime() took %dms", nightTime);
+    //     }
+    //     // Enter sleepy state with cycling between SLEEPY1 and SLEEPY2
+    //     return handleSleepyStateCycling();
+    // } else {
+    //     // Force exit from sleepy state since isNightTime() is false
+    //     inSleepyState = false;
+    // }
+    
+    // TEMPORARY FIX: Skip time check entirely to restore button responsiveness
+    inSleepyState = false;
     
     // Check for low battery - trigger DEMOTIVATED state (high priority)
     if (isLowBattery()) {
-        uint8_t batteryPercent = powerStatus->getBatteryChargePercent();
         return DEMOTIVATED;
     }
     
@@ -542,80 +567,90 @@ PetState LoRabotModule::calculateNewState() {
         return HAPPY;
     }
     
-    // Clean Animation System: Handle phase transitions and states
+    // Simplified Animation System: Direct state cycling with 2-second intervals
     if (currentNodeCount > 0) {
-        // Check if we need to switch phases (every 6-8 seconds)
-        if (now >= nextPhaseTime) {
-            if (currentPhase == AWAKE_PHASE) {
-                // Switch to LOOKING phase
-                currentPhase = LOOKING_PHASE;
-                lookingCycle = 0; // Start with looking left
-                nextLookingTime = now + 500; // First looking change in 500ms
-                nextPhaseTime = now + 2000 + random(0, 1000); // Looking phase lasts 2-3 seconds
-            } else {
-                // Switch to AWAKE phase  
-                currentPhase = AWAKE_PHASE;
-                awakeStartTime = now;
-                nextBlinkTime = now + 1000 + random(0, 2000); // Next blink in 1-3 seconds
-                nextPhaseTime = now + 6000 + random(0, 2000); // Awake phase lasts 6-8 seconds
+        // Handle BLINK state (highest priority)
+        if (inBlinkState) {
+            if ((now - blinkStartTime) >= 300) { // Blink duration: 300ms (reduced for faster response)
+                inBlinkState = false;
+                nextBlinkTime = now + 3000 + random(0, 1000); // Next blink in 3-4 seconds
+                return AWAKE;
             }
-            phaseStartTime = now;
+            return BLINK; // Stay in BLINK
         }
         
-        // Handle current phase logic
-        if (currentPhase == AWAKE_PHASE) {
-            // AWAKE Phase: AWAKE with periodic blinking
-            
-            // Handle BLINK state (highest priority in AWAKE phase)
-            if (inBlinkState) {
-                if ((now - blinkStartTime) >= 200) { // Blink duration: 200ms
-                    inBlinkState = false;
-                    awakeStartTime = now; // Reset awake timer after blink
-                    nextBlinkTime = now + 1000 + random(0, 2000); // Next blink in 1-3 seconds
-                    return AWAKE;
-                }
-                return BLINK; // Stay in BLINK
-            }
-            
-            // Check if it's time to blink
-            if (now >= nextBlinkTime) {
-                inBlinkState = true;
-                blinkStartTime = now;
-                displayNeedsUpdate = true;
-                return BLINK;
-            }
-            
-            // Default AWAKE state
-            return AWAKE;
-            
-        } else {
-            // LOOKING Phase: Cycle through Looking Left → Looking Right → AWAKE
-            
-            if (now >= nextLookingTime) {
-                lookingCycle = (lookingCycle + 1) % 3;
-                nextLookingTime = now + 500; // 500ms between looking changes
-            }
-            
-            switch (lookingCycle) {
-                case 0: return LOOKING_AROUND_LEFT;
-                case 1: return LOOKING_AROUND_RIGHT; 
-                case 2: return AWAKE;
-                default: return AWAKE;
-            }
+        // Check if it's time to blink
+        if (now >= nextBlinkTime) {
+            inBlinkState = true;
+            blinkStartTime = now;
+            displayNeedsUpdate = true;
+            return BLINK;
+        }
+        
+        // Super simple state cycling: change every 1 second for visible animation
+        uint32_t cycleTime = (now - phaseStartTime) / 1000; // 1 second per state for faster animation
+        uint32_t stateIndex = cycleTime % 3; // 3 states: 0=AWAKE, 1=LEFT, 2=RIGHT
+        
+        // Force display update every cycle to ensure changes are visible
+        if (cycleTime != lastCycleTime) {
+            displayNeedsUpdate = true;
+            lastCycleTime = cycleTime;
+        }
+        
+        switch (stateIndex) {
+            case 0: return AWAKE;
+            case 1: return LOOKING_AROUND_LEFT;
+            case 2: return LOOKING_AROUND_RIGHT;
+            default: return AWAKE;
         }
         
     } else {
-        // No nodes present, stay in AWAKE phase but no blinking
-        currentPhase = AWAKE_PHASE;
+        // No nodes present, just AWAKE with occasional blinking
+        if (inBlinkState) {
+            if ((now - blinkStartTime) >= 300) {
+                inBlinkState = false;
+                nextBlinkTime = now + 8000 + random(0, 2000); // Next blink in 8-10 seconds
+                return AWAKE;
+            }
+            return BLINK;
+        }
+        
+        if (now >= nextBlinkTime) {
+            inBlinkState = true;
+            blinkStartTime = now;
+            displayNeedsUpdate = true;
+            return BLINK;
+        }
+        
         return AWAKE;
     }
 }
 
 // Get update interval based on current state and activity
 uint32_t LoRabotModule::getUpdateInterval() {
-    uint32_t baseInterval = 30; // 30ms baseline timing - reduced from 30ms to improve UI responsiveness
-    return baseInterval;
+    // Use very short intervals for animation states to ensure smooth transitions
+    if (currentState == BLINK || currentState == LOOKING_AROUND_LEFT || currentState == LOOKING_AROUND_RIGHT) {
+        return 20; // Very fast updates for animation states
+    }
     
+    // Use short intervals for AWAKE state to ensure state changes are detected
+    if (currentState == AWAKE) {
+        return 30; // Fast updates for AWAKE state
+    }
+    
+    // Use medium intervals for active states
+    if (currentState == EXCITED || currentState == GRATEFUL || currentState == SENDER || currentState == HAPPY) {
+        return 50; // Medium updates for active states
+    }
+    
+    // Use medium intervals for SLEEPY states to maintain cycling
+    if (currentState == SLEEPY1 || currentState == SLEEPY2) {
+        return 50; // Medium updates for SLEEPY cycling
+    }
+    
+    // Use longer intervals for static states
+    uint32_t baseInterval = 100; // 100ms baseline timing for static states
+    return baseInterval;
 }
 
 // Get current face string
@@ -806,7 +841,6 @@ int32_t LoRabotModule::executePetStateUpdate() {
     
     // Check if we've spent too much time
     if ((millis() - startTime) > MAX_STEP_TIME_MS) {
-    
         return getUpdateInterval(); // Yield control
     }
     
@@ -932,8 +966,22 @@ int32_t LoRabotModule::executeMessageProcessing() {
 int32_t LoRabotModule::executeCleanup() {
     uint32_t startTime = millis();
     
-    // TODO: Implement cleanup logic here
-    // For now, just move to yield step
+    // Handle non-blocking state save
+    static uint32_t lastSaveTime = 0;
+    uint32_t now = millis();
+    
+    // Only save every 2 minutes to reduce flash wear
+    if ((now - lastSaveTime) > 120000) { // Every 2 minutes
+        lastSaveTime = now;
+        
+        // Quick save without blocking - just save essential data
+        Preferences prefs;
+        if (prefs.begin("lorabot", false)) {
+            prefs.putUChar("state", currentState);
+            prefs.putUInt("lastActivity", lastActivityTime);
+            prefs.end();
+        }
+    }
     
     // Check if we've spent too much time
     if ((millis() - startTime) > MAX_STEP_TIME_MS) {
@@ -975,8 +1023,7 @@ int32_t LoRabotModule::executeNodeDiscoveryCheck() {
         processNetworkEvent();
         
         // Clear cached status line when node count changes so it gets recalculated
-        static char cachedStatusLine[32] = "";
-        cachedStatusLine[0] = '\0'; // Clear the cache
+        // Note: cachedStatusLine is handled in drawFrame() optimization
     }
     
     if (analysis.shouldTriggerHappy) {

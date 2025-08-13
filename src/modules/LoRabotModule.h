@@ -206,7 +206,10 @@ private:
     uint8_t lookingCycle;           // 0=left, 1=right, 2=awake
     uint32_t nextLookingTime;       // When to advance looking cycle (~500ms)
     
-    uint32_t lastFunnyMessageTime;  // Track funny message rotation separately (every 3 seconds)
+    uint32_t lastFunnyMessageTime;  // Track funny message rotation separately (every 4 seconds)
+    
+    // Animation state tracking for better performance
+    uint32_t lastCycleTime;         // Track last cycle time for display updates
     
     // Display optimization
     char lastDisplayedFace[16];
