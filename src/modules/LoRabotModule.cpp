@@ -72,18 +72,28 @@ LoRabotModule *loRabotModule;
 
 // Constructor
 LoRabotModule::LoRabotModule() : 
+    //The module listens to text messages sent on port 1 (TEXT_MESSAGE_APP)
+    //can send text messages on the same port
+    //processes incoming text messages to trigger various bot behaviors 
+    //(like changing facial expressions, animations, etc.)  
     SinglePortModule("lorabot", meshtastic_PortNum_TEXT_MESSAGE_APP),
     concurrency::OSThread("LoRabot")
+   
 {
+    // Initialize state variables
+    //AWAKE is the "home base" state that the LoRabot always returns to after any action
+    //previousState is used to track the previous state, so we can detect when the state changes
+    //lastActivityTime is used to track the last time the LoRabot was active
+    //lastStateChange is used to track the last time the state changed
     currentState = AWAKE;
     previousState = AWAKE;
     lastActivityTime = millis();
     lastStateChange = millis();
     networkEventCount = 0;
     currentNodeCount = 0;
-    // batteryLevel = 100;  // TODO: Get from actual battery API
     friendCount = 0;
     displayNeedsUpdate = true;
+    //memset is used to clear the memory of the lastDisplayedFace and friends arrays
     memset(lastDisplayedFace, 0, sizeof(lastDisplayedFace));
     memset(friends, 0, sizeof(friends));
     
@@ -111,8 +121,6 @@ LoRabotModule::LoRabotModule() :
     nextBlinkTime = millis() + random(1000, 2000); // First blink in 1-2 seconds
     lastBlinkCheckTime = 0;
     
-
-    
     // Initialize SENDER state tracking
     inSenderState = false;
     senderStartTime = 0;
@@ -134,21 +142,21 @@ LoRabotModule::LoRabotModule() :
     pendingSenderTrigger = false;
     senderDetectionWindow = 2000; // 2 second window for correlation
     
-    // Initialize clean animation system
+    // Initialize animation system
     uint32_t now = millis();
     currentPhase = AWAKE_PHASE;
     phaseStartTime = now;
-    nextPhaseTime = now + 6000 + random(0, 2000); // 6-8 seconds for first phase
+    nextPhaseTime = now + 6000 + random(0, 2000); // 1-2 seconds for first phase
     
     // Initialize AWAKE phase
     awakeStartTime = now;
-    nextBlinkTime = now + 1000 + random(0, 2000); // 1-3 seconds until first blink
+    nextBlinkTime = now + 1000 + random(0, 2000); // 1-2 seconds until first blink
     
     // Initialize LOOKING phase  
     lookingCycle = 0; // 0=left, 1=right, 2=awake
     nextLookingTime = now + 500; // 500ms for looking cycle
     
-    lastFunnyMessageTime = 0; // Track funny message rotation separately (every 4 seconds)
+    lastFunnyMessageTime = 0; // Track awake message rotation separately 
     
     // Initialize animation tracking
     lastCycleTime = 0;
@@ -168,49 +176,64 @@ LoRabotModule::~LoRabotModule() {
     saveState();
 }
 
-// NEW: Step-based main thread execution for cooperative threading
+// Step-based main thread execution for cooperative threading
+// This system breaks down complex operations into small, non-blocking steps
+// Each step can yield control if it takes too long, ensuring system responsiveness
 int32_t LoRabotModule::runOnce() {
     uint32_t now = millis();
     
-    // Check if we should yield based on time spent in current step
+    // COOPERATIVE YIELDING: Check if current step has been running too long
+    // This prevents any single step from blocking the entire system
     if ((now - stepState.lastYieldTime) > MAX_STEP_TIME_MS) {
         stepState.lastYieldTime = now;
-        return getUpdateInterval(); // Yield control back to scheduler
+        return getUpdateInterval(); // Request yield by returning delay value
+        // The actual yielding happens in OSThread::run() -> setInterval(newDelay)
+        // which schedules this thread to run again after the delay
     }
     
-    // Execute current step
+    // STEP EXECUTION: Execute one step of the processing cycle
+    // Each step performs a specific task, then advances to the next step
+    // This creates a continuous cycle: PET_STATE → NODE_DISCOVERY → SENDER → DISPLAY → MESSAGE → CLEANUP → YIELD → repeat
     switch (stepState.currentStep) {
         case STEP_PET_STATE_UPDATE:
+            // Step 1: Update pet's emotional state based on network activity and time
             return executePetStateUpdate();
             
         case STEP_NODE_DISCOVERY_CHECK:
+            // Step 2: Check for new nodes in the mesh network
             return executeNodeDiscoveryCheck();
             
         case STEP_SENDER_DETECTION:
+            // Step 3: Detect when we send messages (for SENDER state)
             return executeSenderDetection();
             
         case STEP_DISPLAY_UPDATE:
+            // Step 4: Update the display with current face/state
             return executeDisplayUpdate();
             
         case STEP_MESSAGE_PROCESSING:
+            // Step 5: Process any pending message-related tasks
             return executeMessageProcessing();
             
         case STEP_CLEANUP:
+            // Step 6: Clean up temporary states and prepare for next cycle
             return executeCleanup();
             
         case STEP_YIELD:
+            // Step 7: Yield control and reset to beginning of cycle
             stepState.currentStep = STEP_PET_STATE_UPDATE; // Reset cycle
             stepState.lastYieldTime = now;
             return getUpdateInterval();
             
         default:
+            // Safety fallback: reset to first step if unknown state
             stepState.currentStep = STEP_PET_STATE_UPDATE; // Reset to first step
             return getUpdateInterval();
     }
 }
 
 // Handle received mesh packets
-//NOT outgoing ones, this function needs cleaning up
+//NOT outgoing ones
 ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
     // Track network activity
     processNetworkEvent();
@@ -244,54 +267,28 @@ ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
         currentState = EXCITED;
         lastStateChange = millis();
         displayNeedsUpdate = true;
-        
-    } else if (mp.decoded.portnum == 1) {
-        // NEW: Clean text message detection using focused analysis
-        TextMessageAnalysis analysis = analyzeTextMessageDirection(mp);
-        
-        if (analysis.shouldReact) {
-            switch (analysis.direction) {
-         
-                    
-                case TEXT_TO_ME_DIRECT:
-                case TEXT_BROADCAST_BY_OTHER:
-                    // Someone is talking to me! Trigger EXCITED state
-                    // This will be handled by the existing EXCITED logic above
-                    break;
-                    
-                default:
-                    break;
-            }
-        }
     } 
-    
-    // Update friend tracking if this is from a user
+    // maintains friends list for the LoRabot by
+    // updating friend tracking if this is from a user
     if (mp.from != 0) {
         updateFriendsList(mp.from);
     }
     
-    // Don't consume the packet - let other modules handle it
+    // Don't consume the packet - let other modules handle/"see" it
     return ProcessMessage::CONTINUE;
 }
 
 // Draw the pet on the OLED display
 void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
                               int16_t x, int16_t y) {
-    
     const char* currentFace = getCurrentFace();
-    // Remove unused variable to eliminate warning
-    // const char* stateName = (const char*)pgm_read_ptr(&STATE_NAMES[currentState]);
-    
 
-    // Always draw the frame (screen system expects this)
-    // Clear the frame area completely
-    //display->setColor(BLACK);
-    //display->fillRect(x, y, 128, 64);
     display->setColor(WHITE);
     
-    // Draw the pet face on the Left side (moved from center)
+    // Draw the pet face and text 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(ArialMT_Plain_24);
+    //left side of the screen
     display->drawString(x + 38, y + 10, currentFace);
     
     // Draw status info or node discovery message - simplified for performance
@@ -304,7 +301,6 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
     static uint32_t lastSenderMessageUpdate = 0;
     if (now - lastFaceUpdateTime > 1000) { // Update face animation every 1 second
         lastFaceUpdateTime = now;
-        
         // Face animation cycle is now handled in calculateNewState() for better state management
         
         // Cycle through SENDER messages every 2 seconds while in SENDER state
@@ -329,7 +325,7 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
             display->setFont(ArialMT_Plain_10);
             display->drawString(x + 64, y + 50, senderMsg);
         } else if (currentState == AWAKE || currentState == LOOKING_AROUND_LEFT || currentState == LOOKING_AROUND_RIGHT || currentState == BLINK) {
-            // Show funny messages for awake/looking/blink states
+            // Show awake/funny messages for awake/looking/blink states
             const char* funnyMsg = (const char*)pgm_read_ptr(&FUNNY_MESSAGES[funnyMessageIndex]);
             display->setFont(ArialMT_Plain_10);
             display->drawString(x + 64, y + 50, funnyMsg);
@@ -525,7 +521,7 @@ bool LoRabotModule::shouldTriggerSender() {
 PetState LoRabotModule::calculateNewState() {
     uint32_t now = millis();
     
-    // Rotate funny messages every 6 seconds for more lively animation
+    // Rotate awake/funny messages every 6 seconds for more lively animation
     if ((now - lastFunnyMessageTime) >= 6000) {
         funnyMessageIndex = (funnyMessageIndex + 1) % 8; // Rotate through 8 funny messages
         lastFunnyMessageTime = now;
@@ -688,115 +684,9 @@ void LoRabotModule::loadState() {
     }
 }
 
-// NEW: Simple detection for outgoing text messages from my node
-bool LoRabotModule::isMyOutgoingTextMessage(const meshtastic_MeshPacket &mp) {
-    NodeNum myNodeNum = nodeDB->getNodeNum();
-    
-    bool isOutgoing = (mp.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) &&
-                     (mp.from == myNodeNum) &&                    // From me
-                     (mp.to != myNodeNum);                        // Not to myself
-    
-    return isOutgoing;
-}
 
-// NEW: Simple detection for incoming text messages to my node
-bool LoRabotModule::isIncomingTextMessage(const meshtastic_MeshPacket &mp) {
-    NodeNum myNodeNum = nodeDB->getNodeNum();
-    
-    bool isIncoming = (mp.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) &&
-                     (mp.from != myNodeNum);                      // Not from me
-    
-    
-    return isIncoming;
-}
 
-// NEW: Analyze text message direction for social behavior
-TextMessageDirection LoRabotModule::analyzeTextMessage(const meshtastic_MeshPacket &mp) {
-    // Only analyze text messages
-    if (mp.decoded.portnum != meshtastic_PortNum_TEXT_MESSAGE_APP) {
-        return TEXT_RELAYED; // Not a text message
-    }
-    
-    NodeNum myNodeNum = nodeDB->getNodeNum();
-    bool isFromMe = (mp.from == myNodeNum);
-    bool isBroadcast = (mp.to == NODENUM_BROADCAST || mp.to == 0xffffffff);
-    bool isToMe = (mp.to == myNodeNum);
-    bool isFirstHop = (mp.hop_start == mp.hop_limit && mp.hop_limit > 0);
-    
 
-    if (isFromMe) {
-        if (isBroadcast) {
-            return TEXT_BROADCAST_BY_ME;    // I broadcast a message
-        } else {
-            return MY_TEXT_TO_SOMEONE;      // I sent direct message
-        }
-    }
-    
-    if (isToMe && !isBroadcast) {
-
-        return TEXT_TO_ME_DIRECT;           // Direct message to me
-    }
-    
-    if (isBroadcast && isFirstHop) {
-        return TEXT_BROADCAST_BY_OTHER;     // Someone else broadcast
-    }
- 
-    return TEXT_RELAYED;                    // Relayed message
-}
-
-// NEW: Complete text message analysis with pet state suggestions
-TextMessageAnalysis LoRabotModule::analyzeTextMessageDirection(const meshtastic_MeshPacket &mp) {
-    TextMessageAnalysis analysis;
-    NodeNum myNodeNum = nodeDB->getNodeNum();
-    
-    // Only analyze text messages
-    if (mp.decoded.portnum != meshtastic_PortNum_TEXT_MESSAGE_APP) {
-        analysis.direction = TEXT_RELAYED;
-        analysis.shouldReact = false;
-        analysis.suggestedState = AWAKE;
-        return analysis;
-    }
-    
-    // Determine text message direction
-    analysis.direction = analyzeTextMessage(mp);
-    
-    // Initialize analysis
-    analysis.myNodeNum = myNodeNum;
-    analysis.recipientNodeNum = mp.to;
-    analysis.senderNodeNum = mp.from;
-    analysis.shouldReact = true;
-    analysis.suggestedState = AWAKE; // Default state
-    
-        // Switch-based analysis for clean, readable logic
-    switch (analysis.direction) {
-        case MY_TEXT_TO_SOMEONE:
-            // I sent a text message to someone! Pet gets SENDER state
-            analysis.suggestedState = SENDER;
-            break;
-            
-        case TEXT_BROADCAST_BY_ME:
-            // I broadcast a message! Pet gets SENDER state
-            analysis.suggestedState = SENDER;
-            break;
-            
-        case TEXT_TO_ME_DIRECT:
-            // Someone texted me directly! Pet gets excited
-            analysis.suggestedState = EXCITED;
-            break;
-            
-        case TEXT_BROADCAST_BY_OTHER:
-            // Someone else broadcast
-            analysis.suggestedState = EXCITED;
-            break;
-            
-        case TEXT_RELAYED:
-            // Just background chatter
-            analysis.shouldReact = false;
-            break;
-    }
-    
-    return analysis;
-}
 
 // NEW: Initialize step-based execution state
 void LoRabotModule::initializeStepState() {
@@ -818,22 +708,25 @@ void LoRabotModule::initializeStepState() {
 }
 
 // NEW: Execute pet state update step (Step 1)
+// This step updates the pet's emotional state based on network activity, time, and events
 int32_t LoRabotModule::executePetStateUpdate() {
     uint32_t startTime = millis();
     
     // Update pet state based on network activity and time
+    // This includes: AWAKE, EXCITED, HAPPY, SLEEPY, etc.
     updatePetState();
     
-    // Check if we've spent too much time
+    // COOPERATIVE YIELDING: Check if this step took too long
+    // If so, yield control and resume this step later
     if ((millis() - startTime) > MAX_STEP_TIME_MS) {
         return getUpdateInterval(); // Yield control
     }
     
-    // Move to next step
+    // STEP ADVANCEMENT: Move to the next step in the cycle
     stepState.currentStep = STEP_NODE_DISCOVERY_CHECK;
     stepState.stepStartTime = millis();
     
-    return 0; // Continue immediately to next step
+    return 0; // Continue immediately to next step (no delay)
 }
 
 // NEW: Execute sender detection step (Step 3) - placeholder for now

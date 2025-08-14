@@ -28,14 +28,7 @@ enum PetState : uint8_t {
     SENDER
 };
 
-// Text message direction classification - focused on social behavior
-enum TextMessageDirection : uint8_t {
-    MY_TEXT_TO_SOMEONE = 0,      // I sent a text message to someone
-    TEXT_TO_ME_DIRECT,           // Someone sent me a direct text
-    TEXT_BROADCAST_BY_ME,        // I sent a broadcast text
-    TEXT_BROADCAST_BY_OTHER,     // Someone else broadcast text
-    TEXT_RELAYED                 // Multi-hop text message
-};
+
 
 // Node discovery classification - focused on social behavior
 enum NodeDiscoveryType : uint8_t {
@@ -66,15 +59,7 @@ enum MessageType : uint8_t {
     IGNORED_MESSAGE              // Messages we don't care about
 };
 
-// Text message analysis structure
-struct TextMessageAnalysis {
-    TextMessageDirection direction;
-    NodeNum myNodeNum;
-    NodeNum recipientNodeNum;
-    NodeNum senderNodeNum;
-    bool shouldReact;
-    PetState suggestedState;
-};
+
 
 // Node discovery analysis structure
 struct NodeDiscoveryAnalysis {
@@ -270,10 +255,8 @@ private:
     PetState handleSleepyStateCycling();
     
     // NEW: Text message detection functions
-    bool isMyOutgoingTextMessage(const meshtastic_MeshPacket &mp);
-    bool isIncomingTextMessage(const meshtastic_MeshPacket &mp);
-    TextMessageDirection analyzeTextMessage(const meshtastic_MeshPacket &mp);
-    TextMessageAnalysis analyzeTextMessageDirection(const meshtastic_MeshPacket &mp);
+
+
     
     // NEW: Node discovery detection functions
     NodeDiscoveryType analyzeNodeDiscovery(size_t totalNodeCount, size_t previousNodeCount);
