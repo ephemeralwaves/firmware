@@ -7,11 +7,6 @@
 // External declarations
 extern TextMessageModule *textMessageModule;
 
-// TODO: Research correct includes for:
-// - Battery level reading
-// - Power management
-// - Hardware-specific functions
-
 // Face definitions stored in flash memory (PROGMEM)
 // Each face is tested for proper display on SSD1306 OLED
 // Using basic ASCII + common Unicode that renders well on small displays
@@ -279,16 +274,16 @@ ProcessMessage LoRabotModule::handleReceived(const meshtastic_MeshPacket &mp) {
 }
 
 // Draw the pet on the OLED display
+// This function handles display rendering only - state management is handled by updatePetState()/calculateNewState()
 void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
                               int16_t x, int16_t y) {
     const char* currentFace = getCurrentFace();
 
     display->setColor(WHITE);
     
-    // Draw the pet face and text 
+    // Draw the pet face on the left side of the screen
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(ArialMT_Plain_24);
-    //left side of the screen
     display->drawString(x + 38, y + 10, currentFace);
     
     // Draw status info or node discovery message - simplified for performance
@@ -296,47 +291,30 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
     static char cachedStatusLine[32] = "";
     uint32_t now = millis();
     
-    // Update face animation every 1 second for lively animation, but status line every 2 seconds for performance
-    static uint32_t lastFaceUpdateTime = 0;
+    // SENDER message rotation - only timing logic that drawFrame needs to handle
+    // (funny message rotation is handled by calculateNewState())
     static uint32_t lastSenderMessageUpdate = 0;
-    if (now - lastFaceUpdateTime > 1000) { // Update face animation every 1 second
-        lastFaceUpdateTime = now;
-        // Face animation cycle is now handled in calculateNewState() for better state management
-        
-        // Cycle through SENDER messages every 2 seconds while in SENDER state
-        if (currentState == SENDER && (now - lastSenderMessageUpdate) > 2000) {
-            senderMessageIndex = (senderMessageIndex + 1) % 5; // Rotate through 5 sender messages
-            lastSenderMessageUpdate = now;
-        }
-        
+    if (currentState == SENDER && (now - lastSenderMessageUpdate) > 2000) {
+        senderMessageIndex = (senderMessageIndex + 1) % 5; // Rotate through 5 sender messages
+        lastSenderMessageUpdate = now;
     }
     
     // Only update status line every 2 seconds to reduce CPU usage
     if (now - lastDrawTime > 2000) {
         lastDrawTime = now;
         
-        if (currentState == HAPPY && showingNewNode) {
-            // Show the discovered node name when happy (new node found) - on the right side
-            display->setFont(ArialMT_Plain_10);
-            display->drawString(x + 64, y + 50, lastNodeName);
-        } else if (currentState == SENDER) {
-            // Show sender messages for SENDER state
-            const char* senderMsg = (const char*)pgm_read_ptr(&SENDER_MESSAGES[senderMessageIndex]);
-            display->setFont(ArialMT_Plain_10);
-            display->drawString(x + 64, y + 50, senderMsg);
-        } else if (currentState == AWAKE || currentState == LOOKING_AROUND_LEFT || currentState == LOOKING_AROUND_RIGHT || currentState == BLINK) {
-            // Show awake/funny messages for awake/looking/blink states
-            const char* funnyMsg = (const char*)pgm_read_ptr(&FUNNY_MESSAGES[funnyMessageIndex]);
-            display->setFont(ArialMT_Plain_10);
-            display->drawString(x + 64, y + 50, funnyMsg);
-        } else {
+        // Update cached status info when needed
+        if (currentState != HAPPY && currentState != SENDER && 
+            currentState != AWAKE && currentState != LOOKING_AROUND_LEFT && 
+            currentState != LOOKING_AROUND_RIGHT && currentState != BLINK) {
+            
             // Show cached status info - avoid expensive operations
             static uint32_t lastFavoriteCount = 0;
             static uint32_t lastFavoriteCountTime = 0;
             static uint32_t lastNodeCount = 0;
             
             // Only recalculate if node count changed or time expired
-            if (currentNodeCount != lastNodeCount || (now - lastFavoriteCountTime > 15000)) { // Increased to 15 seconds
+            if (currentNodeCount != lastNodeCount || (now - lastFavoriteCountTime > 15000)) {
                 uint32_t favoriteCount = 0;
                 size_t totalNodes = nodeDB->getNumMeshNodes();
                 
@@ -351,33 +329,29 @@ void LoRabotModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
                 lastFavoriteCountTime = now;
                 lastNodeCount = currentNodeCount;
                 
-                // Firmware Uses: nodeDB->getNumMeshNodes() 
-                //This returns the total number of node entries in the database
                 uint32_t actualNodeCount = nodeDB->getNumMeshNodes();
-                
                 snprintf(cachedStatusLine, sizeof(cachedStatusLine), "Nodes:%d Friends:%d", 
                         actualNodeCount, lastFavoriteCount);
             }
-            display->setFont(ArialMT_Plain_10);
-            display->drawString(x + 64, y + 50, cachedStatusLine);
         }
+    }
+    
+    // Draw the status text (same logic for both cached and fresh updates)
+    display->setFont(ArialMT_Plain_10);
+    if (currentState == HAPPY && showingNewNode) {
+        // Show the discovered node name when happy (new node found)
+        display->drawString(x + 64, y + 50, lastNodeName);
+    } else if (currentState == SENDER) {
+        // Show sender messages for SENDER state
+        const char* senderMsg = (const char*)pgm_read_ptr(&SENDER_MESSAGES[senderMessageIndex]);
+        display->drawString(x + 64, y + 50, senderMsg);
+    } else if (currentState == AWAKE || currentState == LOOKING_AROUND_LEFT || currentState == LOOKING_AROUND_RIGHT || currentState == BLINK) {
+        // Show awake/funny messages for awake/looking/blink states
+        const char* funnyMsg = (const char*)pgm_read_ptr(&FUNNY_MESSAGES[funnyMessageIndex]);
+        display->drawString(x + 64, y + 50, funnyMsg);
     } else {
-                 // Use cached display for better performance
-         if (currentState == HAPPY && showingNewNode) {
-             display->setFont(ArialMT_Plain_10);
-             display->drawString(x + 64, y + 50, lastNodeName);
-         } else if (currentState == SENDER) {
-            const char* senderMsg = (const char*)pgm_read_ptr(&SENDER_MESSAGES[senderMessageIndex]);
-            display->setFont(ArialMT_Plain_10);
-            display->drawString(x + 64, y + 50, senderMsg);
-        } else if (currentState == AWAKE || currentState == LOOKING_AROUND_LEFT || currentState == LOOKING_AROUND_RIGHT || currentState == BLINK) {
-            const char* funnyMsg = (const char*)pgm_read_ptr(&FUNNY_MESSAGES[funnyMessageIndex]);
-            display->setFont(ArialMT_Plain_10);
-            display->drawString(x + 64, y + 50, funnyMsg);
-        } else {
-            display->setFont(ArialMT_Plain_10);
-            display->drawString(x + 64, y + 50, cachedStatusLine);
-        }
+        // Show cached status info
+        display->drawString(x + 64, y + 50, cachedStatusLine);
     }
     
     // Draw message popup on the Right side when excited
