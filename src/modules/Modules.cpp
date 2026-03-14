@@ -3,8 +3,6 @@
 #include "buzz/BuzzerFeedbackThread.h"
 #include "modules/SystemCommandsModule.h"
 #include "modules/LoRabotModule.h"
-#if !MESHTASTIC_EXCLUDE_I2C
-#include "input/cardKbI2cImpl.h"
 #endif
 #include "modules/StatusLEDModule.h"
 #if !MESHTASTIC_EXCLUDE_REPLYBOT
@@ -41,9 +39,6 @@
 #include "modules/PowerStressModule.h"
 #endif
 #include "modules/RoutingModule.h"
-#if HAS_TRAFFIC_MANAGEMENT && !MESHTASTIC_EXCLUDE_TRAFFIC_MANAGEMENT
-#include "modules/TrafficManagementModule.h"
-#endif
 #include "modules/TextMessageModule.h"
 #if !MESHTASTIC_EXCLUDE_TRACEROUTE
 #include "modules/TraceRouteModule.h"
@@ -126,14 +121,6 @@ void setupModules()
 #if !MESHTASTIC_EXCLUDE_REPLYBOT
     new ReplyBotModule();
 #endif
-
-#if HAS_TRAFFIC_MANAGEMENT && !MESHTASTIC_EXCLUDE_TRAFFIC_MANAGEMENT
-    // Instantiate only when enabled to avoid extra memory use and background work.
-    if (moduleConfig.has_traffic_management && moduleConfig.traffic_management.enabled) {
-        trafficManagementModule = new TrafficManagementModule();
-    }
-#endif
-
 #if !MESHTASTIC_EXCLUDE_ADMIN
     adminModule = new AdminModule();
 #endif
@@ -189,56 +176,11 @@ void setupModules()
 #if !MESHTASTIC_EXCLUDE_POWERSTRESS
     new PowerStressModule();
 #endif
-
 #if HAS_SCREEN
-        loRabotModule = new LoRabotModule();
+    loRabotModule = new LoRabotModule();
 #endif
-        // Example: Put your module here
-        // new ReplyModule();
-#if (HAS_BUTTON || ARCH_PORTDUINO) && !MESHTASTIC_EXCLUDE_INPUTBROKER
-        if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
-            rotaryEncoderInterruptImpl1 = new RotaryEncoderInterruptImpl1();
-            if (!rotaryEncoderInterruptImpl1->init()) {
-                delete rotaryEncoderInterruptImpl1;
-                rotaryEncoderInterruptImpl1 = nullptr;
-            }
-            upDownInterruptImpl1 = new UpDownInterruptImpl1();
-            if (!upDownInterruptImpl1->init()) {
-                delete upDownInterruptImpl1;
-                upDownInterruptImpl1 = nullptr;
-            }
-            cardKbI2cImpl = new CardKbI2cImpl();
-            cardKbI2cImpl->init();
-#ifdef INPUTBROKER_MATRIX_TYPE
-            kbMatrixImpl = new KbMatrixImpl();
-            kbMatrixImpl->init();
-#endif // INPUTBROKER_MATRIX_TYPE
-#ifdef INPUTBROKER_SERIAL_TYPE
-            aSerialKeyboardImpl = new SerialKeyboardImpl();
-            aSerialKeyboardImpl->init();
-#endif // INPUTBROKER_MATRIX_TYPE
-        }
-#endif // HAS_BUTTON
-#if ARCH_PORTDUINO
-        if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
-            seesawRotary = new SeesawRotary("SeesawRotary");
-            if (!seesawRotary->init()) {
-                delete seesawRotary;
-                seesawRotary = nullptr;
-            }
-            aLinuxInputImpl = new LinuxInputImpl();
-            aLinuxInputImpl->init();
-        }
-#endif
-#if !MESHTASTIC_EXCLUDE_INPUTBROKER
-        if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
-            trackballInterruptImpl1 = new TrackballInterruptImpl1();
-            trackballInterruptImpl1->init(TB_DOWN, TB_UP, TB_LEFT, TB_RIGHT, TB_PRESS);
-        }
-#endif
-#ifdef INPUTBROKER_EXPRESSLRSFIVEWAY_TYPE
-        expressLRSFiveWayInput = new ExpressLRSFiveWay();
-#endif
+    // Example: Put your module here
+    // new ReplyModule();
 #if HAS_SCREEN && !MESHTASTIC_EXCLUDE_CANNEDMESSAGES
     if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
         cannedMessageModule = new CannedMessageModule();
