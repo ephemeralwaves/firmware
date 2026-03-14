@@ -47,8 +47,7 @@ extern "C" {
 #define PIN_3V3_ACC_EN (32 + 7) // P1.7, Power to Acc
 
 #define PIN_LED1 (0 + 24) // P0.24
-#define LED_PIN PIN_LED1
-#define LED_BUILTIN -1
+#define LED_POWER PIN_LED1
 #define LED_BLUE -1    // Actually green
 #define LED_STATE_ON 1 // State when LED is lit
 
@@ -123,7 +122,6 @@ extern "C" {
 #define GPS_RESETB_OUT (32 + 14) // P1.14, awlays input pull_up
 
 // #define GPS_THREAD_INTERVAL 50
-#define GPS_FIX_HOLD_TIME 15000 // ms
 
 #define BATTERY_PIN 2
 // #define ADC_CHANNEL ADC1_GPIO2_CHANNEL
@@ -145,9 +143,9 @@ extern "C" {
 #define PIN_BUZZER (0 + 25)    // P0.25, pwm output
 
 #define T1000X_SENSOR_EN
-#define T1000X_VCC_PIN (0 + 4)  // P0.4
-#define T1000X_NTC_PIN (0 + 31) // P0.31
-#define T1000X_LUX_PIN (0 + 29) // P0.29
+#define T1000X_SENSOR_EN_PIN (0 + 4) // P0.4, Power to Sensor (GPIO, not ADC)
+#define T1000X_NTC_PIN (0 + 31)      // P0.31
+#define T1000X_LUX_PIN (0 + 29)      // P0.29
 
 #ifdef __cplusplus
 }
